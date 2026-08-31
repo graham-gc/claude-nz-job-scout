@@ -1,0 +1,59 @@
+{
+  "candidate": {
+    "name": "Example Candidate",
+    "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
+    "employmentTypes": ["internship", "part-time"],
+    "locations": ["Auckland"],
+    "workArrangements": ["on-site", "hybrid", "remote"],
+    "availability": "Full-time during a scheduled summer break; up to 25 hours during study periods",
+    "workRights": "New Zealand student visa with work-hour conditions",
+    "domains": ["API test automation", "developer productivity"],
+    "skills": [
+      { "name": "Java", "level": "core", "years": 8, "lastUsedYear": 2026, "evidence": ["Backend and test platform development"] },
+      { "name": "Spring Boot", "level": "frequent", "years": 4, "lastUsedYear": 2026, "evidence": ["Built an API automation platform"] },
+      { "name": "SQL", "level": "frequent", "years": 8, "lastUsedYear": 2026, "evidence": ["Relational data and test analysis"] }
+    ]
+  },
+  "preferences": {
+    "mode": "profile",
+    "keywords": [],
+    "maxPostingAgeDays": 30,
+    "employmentTypes": ["internship", "part-time"],
+    "locations": ["Auckland"],
+    "workArrangements": ["on-site", "hybrid", "remote"],
+    "maxHoursPerWeekDuringStudy": 25,
+    "includeUnverified": false
+  },
+  "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],
+  "jobs": [
+    {
+      "source": "SEEK",
+      "sourceUrl": "https://nz.seek.com/job/99900001",
+      "applicationUrl": "https://careers.example.com/jobs/NZ-101",
+      "requisitionId": "NZ-101",
+      "title": "Software Test Engineer Intern",
+      "employer": "Example Engineering",
+      "location": "Auckland",
+      "workArrangement": "hybrid",
+      "employmentType": "internship",
+      "engagementModel": "employee",
+      "hoursPerWeek": 40,
+      "duringScheduledBreak": true,
+      "availabilityCompatible": true,
+      "workRightsCompatible": true,
+      "postedAt": "2026-08-25",
+      "closesAt": "2026-09-30",
+      "summary": "API test automation for a Java service platform",
+      "requiredSkills": ["Java", "API automation"],
+      "preferredSkills": ["Spring Boot", "SQL"],
+      "verificationEvidence": {
+        "detailPageOpened": true,
+        "applyRouteAvailable": true,
+        "expiredIndicatorVisible": false,
+        "unavailableIndicatorVisible": false,
+        "verifiedAt": "2026-09-01T09:00:00+12:00",
+        "notes": ["Example data only"]
+      }
+    }
+  ]
+}

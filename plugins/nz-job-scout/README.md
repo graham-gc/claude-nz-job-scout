@@ -1,32 +1,15 @@
 # NZ Job Scout plugin
 
-This directory is self-contained because Claude Code installs plugins into a cache. Do not make runtime code depend on files outside this directory.
+This directory is the installable Claude Code plugin.
 
-## Components
+The skill orchestrates CV reading and browser research. Its bundled `bin/nz-job-scout` command uses only Node.js built-ins to validate the evidence session, remove stale or duplicate listings, calculate depth-aware role and practical scores, and generate Markdown. No package installation is required by plugin users.
 
-- `.claude-plugin/plugin.json`: plugin identity and metadata.
-- `skills/nz-job-scout/SKILL.md`: the user-facing workflow and reliability rules.
-- `src/resume`: local CV ingestion boundary.
-- `src/providers`: browser-provider contracts and catalogue.
-- `src/verification`: evidence classification and URL normalisation.
-- `src/matching`: depth-aware role and practicality scoring.
-- `src/reporting`: deterministic Markdown output.
-- `tests`: unit tests for high-risk decision rules.
+Development commands:
 
-## Architecture boundary
+```bash
+npm install
+npm run typecheck
+npm test
+```
 
-The Claude Code skill coordinates document reading and browser interaction. TypeScript modules contain deterministic logic that can be tested without a live browser. This avoids handling browser credentials in Node.js and makes source-site adapters replaceable.
-
-## Current limitations
-
-- Live SEEK, LinkedIn, Trade Me, and employer-ATS adapters are not implemented yet.
-- The CLI PDF adapter is not implemented; the skill uses Claude's document-reading capability.
-- Match scoring is an initial transparent heuristic and needs fixture-based calibration.
-- No unattended or scheduled search runner is included.
-
-## Next implementation slice
-
-1. Define browser observation fixtures for SEEK and direct employer ATS pages.
-2. Add a provider-independent deduplication pipeline.
-3. Add report persistence and CLI argument parsing.
-4. Add end-to-end tests using saved, non-personal HTML fixtures.
+The browser workflow intentionally does not expose or persist the user's cookies, passwords, or tokens. It also does not apply for jobs or submit personal information without explicit approval.

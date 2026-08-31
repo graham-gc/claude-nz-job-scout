@@ -1,16 +1,20 @@
 {
   "name": "@graham-gc/nz-job-scout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Core utilities for the nz-job-scout Claude Code plugin.",
+  "description": "Core utilities and zero-dependency runtime for the nz-job-scout Claude Code plugin.",
   "type": "module",
+  "bin": {
+    "nz-job-scout": "bin/nz-job-scout"
+  },
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run && npm run test:runtime",
+    "test:runtime": "node --test tests/runtime.test.mjs"
   },
   "devDependencies": {
     "@types/node": ">=22 <26",

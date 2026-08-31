@@ -19,27 +19,19 @@ Obtain or infer only what is necessary:
 
 Do not repeatedly ask for information already present in the CV or conversation. If a missing preference would materially change results, ask one concise question; otherwise use a conservative assumption and disclose it.
 
+Before searching, read `${CLAUDE_PLUGIN_ROOT}/skills/nz-job-scout/references/session-format.md` completely. It is the contract between browser research and the deterministic report runtime.
+
 ## Workflow
 
 ### 1. Read and model the candidate
 
 Read the complete CV. For PDF input, use Claude's document-reading capability; for Markdown, read the source text directly.
 
-Build a compact profile containing:
+Build the `candidate` object described in the session-format reference. Classify each skill as `core`, `frequent`, `working`, or `exposure`. Base this on duration, repeated use, recency, project ownership, production responsibility, and outcomes. A technology is not a strong skill merely because it appears once.
 
-- target role families;
-- employment types and availability;
-- location and remote constraints;
-- work rights;
-- years and recency of relevant experience;
-- domain experience;
-- skills classified as `core`, `frequent`, `working`, or `exposure`.
+### 2. Search in the browser
 
-Do not treat a technology as strong merely because it appears once. Prefer evidence from duration, repeated use, project ownership, production responsibility, and quantified outcomes.
-
-### 2. Search
-
-Use the authenticated browser when the user wants results influenced by their SEEK or LinkedIn account. Ask the user to connect Claude in Chrome or log in when required. Never request, read, copy, save, or export cookies, passwords, session tokens, or browser storage.
+Use an interactive browser when available. If the user wants personalised SEEK or LinkedIn results, let them connect Claude in Chrome and sign in themselves. Work through the existing browser session; never request, read, copy, save, or export cookies, passwords, session tokens, or browser storage.
 
 Search direct sources first:
 
@@ -48,61 +40,60 @@ Search direct sources first:
 - Trade Me Jobs;
 - employer career sites and their ATS pages.
 
-Aggregator sites may reveal leads, but always replace an aggregator link with the direct employer or primary job-board page before recommending it.
+Aggregator sites may reveal leads, but replace every aggregator link with a currently open SEEK or direct employer/ATS page before recommending it. Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
 
-Respect the user's employment-type and location constraints. Do not return full-time permanent roles merely because they share technical keywords when the user asked only for internships or part-time work.
+If no interactive browser is available, search only publicly accessible primary pages and state that personalised or login-gated results could not be checked. Never claim that a listing was verified unless its exact detail page and application route were observed.
 
-### 3. Verify every candidate listing
+### 3. Build an evidence session
 
-Open the detail page and record:
+For every candidate vacancy, open the exact detail page and capture all required fields in the session JSON, including:
 
-- exact title and employer;
-- location and work arrangement;
-- employment type;
-- posting or closing date when visible;
-- direct URL;
-- whether the application control or instructions are available;
-- verification timestamp in `Pacific/Auckland` time.
+- exact title, employer, location, arrangement, and employment type;
+- source and direct application URLs;
+- posting and closing dates when visible;
+- required and preferred skills based on the role's responsibilities;
+- whether the detail page opened and an application route exists;
+- visible expired or unavailable indicators;
+- verification time in `Pacific/Auckland` time;
+- availability and work-right compatibility only when supported by evidence.
 
-Reject a listing from the recommended list when it is expired, removed, redirects only to similar jobs, has no identifiable employer, or cannot be opened. Label uncertain evidence as `unverified`; never describe it as active.
+Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or raw browser state. Never bypass CAPTCHAs, rate limits, access controls, or site restrictions; let the user complete login and challenge screens.
 
-Do not bypass CAPTCHAs, rate limits, access controls, or site restrictions. Let the user complete login and challenge screens.
+### 4. Validate and generate the report
 
-### 4. Deduplicate
+Run the bundled, dependency-free runtime. Quote all paths.
 
-Treat listings as the same vacancy when employer, normalized title, location, and requisition ID or destination application URL match. Keep the direct source with the clearest evidence.
-
-### 5. Score on two dimensions
-
-Produce separate scores from 0 to 10:
-
-- **Role fit**: actual depth and recency of required skills, responsibilities, domain transfer, and evidence of delivery.
-- **Practical fit**: employment type, location, hours, start date, work rights, and any explicit eligibility rules.
-
-A hard blocker must remain visible even when technical fit is high. Never inflate fit using technologies that are only exposure-level skills.
-
-### 6. Report
-
-Unless the user requests another path, save the report as:
-
-```text
-output/nz-jobs-YYYY-MM-DD.md
+```bash
+nz-job-scout validate --input "/absolute/path/to/session.json"
+nz-job-scout report --input "/absolute/path/to/session.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
 ```
 
-Include:
+If the executable is not on `PATH`, use:
 
-1. search criteria and assumptions;
-2. a ranked table of verified roles;
-3. role-fit and practical-fit scores;
-4. evidence, gaps, and hard blockers;
-5. direct links and verification times;
-6. a separate rejected or unverified section with reasons;
-7. suggested CV emphasis for the strongest roles, without inventing experience.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/session.json"
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/session.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
+```
 
-## User-directed keyword mode
+The runtime is authoritative for evidence validation, stale-listing rejection, deduplication, role-fit scoring, practical blockers, and Markdown formatting. Do not hand-edit scores to make a result look stronger. If validation fails, correct the evidence JSON rather than bypassing validation.
 
-When the user supplies keywords, use them as search criteria rather than silently replacing them with CV-derived terms. The CV can still be used for ranking unless the user opts out.
+Unless the user requests another location, write to `output/nz-jobs-YYYY-MM-DD.md` under the user's project directory. Remove the temporary session file after a successful report unless the user asks to keep the evidence.
+
+### 5. Return the result
+
+Tell the user:
+
+- the absolute report path;
+- how many listings were reviewed, recommended, rejected, or unverified;
+- the strongest verified matches and their main blockers or gaps;
+- whether browser/login limitations affected coverage.
+
+If no role survives verification and practical constraints, say clearly: “Today there are no new qualified vacancies.”
+
+## Search modes
+
+In profile mode, derive search families from the candidate's sustained work. In keyword mode, preserve the user's keywords exactly as search criteria; use the CV only for ranking unless the user opts out.
 
 ## Action boundary
 
-Searching, reading, comparing, and writing a local report are allowed. Applying, uploading a CV, sending a message, creating an account, or submitting personal data requires explicit approval at the moment of action.
+Searching, reading, comparing, and writing a local report are allowed. Applying, uploading a CV, sending a message, creating an account, or submitting personal data requires explicit approval at the moment of action. This skill performs an interactive search; it is not an unattended background crawler or application bot.

@@ -1,69 +1,78 @@
 # claude-nz-job-scout
 
-A Claude Code plugin for verified New Zealand job discovery, CV-based matching, and Markdown reporting.
+A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: pre-alpha scaffold. The plugin workflow and core scoring/reporting utilities are present. Live provider adapters and end-to-end browser tests are still under development.
+> Status: **0.2.0 alpha — usable interactive MVP.** Claude reads the CV and researches live pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
 
-## What it is for
+## What works now
 
-`nz-job-scout` helps a candidate:
+- reads a local Markdown or PDF CV through Claude;
+- models skill depth as core, frequent, working, or exposure;
+- supports profile-driven and user-keyword searches;
+- can use an existing signed-in browser session without extracting credentials;
+- requires the exact vacancy page and application route to be observed;
+- rejects expired, stale, duplicate, aggregator-only, and practically incompatible roles;
+- scores role fit separately from employment, location, availability, and work-right fit;
+- saves a structured Markdown report.
 
-- read a local CV in Markdown or PDF;
-- distinguish strong, frequently used skills from brief exposure;
-- search by CV profile or explicit keywords;
-- focus on New Zealand roles that match location, work rights, availability, and employment type;
-- verify that a job detail page and application route are still active;
-- separate technical fit from practical eligibility;
-- save a ranked, evidence-based report as Markdown.
-
-The default search window is 30 days. It can be overridden by the user.
-
-## Repository layout
-
-```text
-.claude-plugin/marketplace.json          Marketplace catalogue
-plugins/nz-job-scout/.claude-plugin/    Plugin manifest
-plugins/nz-job-scout/skills/            Claude Code skill
-plugins/nz-job-scout/src/               Typed core utilities
-plugins/nz-job-scout/tests/             Unit tests
-examples/                               Example configuration and report
-```
-
-Everything required by the installed plugin lives under `plugins/nz-job-scout`. Claude Code copies that directory into its plugin cache during installation.
+The default posting window is 30 days and can be overridden.
 
 ## Install from GitHub
 
-In Claude Code:
+Run these commands inside Claude Code:
 
 ```text
 /plugin marketplace add graham-gc/claude-nz-job-scout
 /plugin install nz-job-scout@graham-nz-tools
+/reload-plugins
 ```
 
-For authenticated SEEK or LinkedIn searches, connect Claude in Chrome and sign in yourself. The plugin must not request, extract, store, or export browser cookies or passwords.
-
-## Example requests
+Then invoke the namespaced skill:
 
 ```text
-Read ~/Career/CV.pdf and find verified Auckland software testing or backend roles posted in the last 30 days. I want internships or part-time work during semester and full-time work during scheduled breaks.
+/nz-job-scout:nz-job-scout Read ~/Career/CV.pdf and find verified Auckland software testing or Java backend internships posted in the last 30 days. Save the report as Markdown.
 ```
 
-```text
-Search for Java Spring Boot test automation roles in Auckland posted in the last 14 days. Save the results as Markdown.
-```
+You can also ask naturally for New Zealand job research; Claude may select the skill when the description matches.
+
+For personalised SEEK or LinkedIn results, connect Claude in Chrome and sign in yourself. The plugin uses the browser interaction available to Claude; it does not request, extract, store, or export cookies, passwords, or tokens.
+
+## How it works
+
+1. Claude reads the CV and models actual skill depth and constraints.
+2. Claude searches and opens primary job pages in the browser.
+3. Claude creates a temporary evidence-session JSON.
+4. `nz-job-scout` validates, filters, deduplicates, scores, and writes the report.
+5. Claude returns the report path and explains the strongest matches and blockers.
+
+Everything needed at runtime is included in the plugin. Users do **not** need to run `npm install`.
 
 ## Reliability policy
 
-A recommended listing must have:
+A recommended listing must have a directly opened job-detail page, no visible expired state, a working application route or current application instructions, a posting date inside the requested window, and a verification timestamp. Aggregators can be used only to discover leads; they cannot be final evidence.
 
-1. a directly opened job-detail page;
-2. no visible expired, closed, or unavailable state;
-3. a working application route or clear application instructions;
-4. a recorded source URL and verification timestamp.
+## Current boundaries
 
-Aggregator pages can be used for discovery, but they are not treated as final evidence. The report labels anything that cannot be verified instead of presenting it as an active vacancy.
+- This is an interactive research workflow, not an unattended scheduled crawler.
+- Site coverage depends on pages that Claude can access and on the user completing login or CAPTCHA challenges.
+- The standalone runtime does not parse PDFs; Claude reads them before creating the evidence session.
+- Website changes can require updates to the skill instructions.
+- The plugin does not apply, upload a CV, send messages, or submit personal information without explicit approval.
 
-## Development
+## Repository layout
+
+```text
+.claude-plugin/marketplace.json               Marketplace catalogue
+plugins/nz-job-scout/.claude-plugin/         Plugin manifest
+plugins/nz-job-scout/skills/                 Skill and evidence contract
+plugins/nz-job-scout/bin/                    Installed command
+plugins/nz-job-scout/runtime/                Zero-dependency report runtime
+plugins/nz-job-scout/src/                    Typed development modules
+plugins/nz-job-scout/tests/                  Unit and runtime tests
+examples/                                    Example session and report
+```
+
+## Local development
 
 Requirements: Node.js 20 or later and Claude Code.
 
@@ -72,17 +81,15 @@ cd plugins/nz-job-scout
 npm install
 npm run typecheck
 npm test
+node bin/nz-job-scout validate --input ../../examples/session.example.json
+node bin/nz-job-scout report --input ../../examples/session.example.json --output /tmp/nz-job-scout-report.md
 ```
 
-From the repository root, validate the plugin metadata with the Claude Code CLI when it is installed:
+From the repository root:
 
 ```bash
 claude plugin validate .
 ```
-
-## Safety
-
-The plugin does not apply for jobs, upload a CV, send messages, or submit personal information without explicit user approval. It does not bypass CAPTCHAs, access controls, or website restrictions.
 
 ## License
 
