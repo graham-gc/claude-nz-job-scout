@@ -31,7 +31,12 @@ Build the `candidate` object described in the session-format reference. Classify
 
 ### 2. Search in the browser
 
-Use an interactive browser when available. If the user wants personalised SEEK or LinkedIn results, let them connect Claude in Chrome and sign in themselves. Work through the existing browser session; never request, read, copy, save, or export cookies, passwords, session tokens, or browser storage.
+Before issuing searches, determine whether an interactive browser session is available.
+
+- For SEEK and LinkedIn, use the interactive browser and the pages visible to the user.
+- Never use `WebFetch`, `Fetch`, `curl`, or another direct HTTP client on SEEK or LinkedIn job pages. These sites commonly return 403 or login walls to non-browser requests, and a successful raw response would not prove that the user's application route works.
+- If personalised results are requested, let the user connect Claude in Chrome and sign in themselves. Work through that browser session; never request, read, copy, save, or export cookies, passwords, session tokens, or browser storage.
+- If no interactive browser is available, tell the user once that SEEK and LinkedIn cannot be reliably verified and ask them to connect a browser. Do not continue issuing equivalent search queries that return zero searches.
 
 Search direct sources first:
 
@@ -40,9 +45,17 @@ Search direct sources first:
 - Trade Me Jobs;
 - employer career sites and their ATS pages.
 
-Aggregator sites may reveal leads, but replace every aggregator link with a currently open SEEK or direct employer/ATS page before recommending it. Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
+A public web-search tool may be used to discover employer or ATS pages that can be opened normally. Search snippets and aggregator pages are leads only, not verification evidence. Replace every aggregator link with a currently open primary page before recommending it. Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
 
-If no interactive browser is available, search only publicly accessible primary pages and state that personalised or login-gated results could not be checked. Never claim that a listing was verified unless its exact detail page and application route were observed.
+Use this failure routing:
+
+1. On a 401, 403, login wall, CAPTCHA, or access-denied response, stop direct requests to that source immediately.
+2. Switch to the interactive browser if available.
+3. Otherwise search for a direct employer/ATS copy of the vacancy.
+4. If no primary page can be opened, record the lead as unverified or omit it. Never label the access error as an expired vacancy.
+5. After two consecutive search operations return no results, stop reformulating the same query family and report the coverage limitation.
+
+Never claim that a listing was verified unless its exact detail page and application route were observed.
 
 ### 3. Build an evidence session
 
