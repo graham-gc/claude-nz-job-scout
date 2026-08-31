@@ -1,0 +1,16 @@
+{
+  "name": "graham-nz-tools",
+  "owner": {
+    "name": "Yusi (Graham) Cheng"
+  },
+  "description": "Claude Code plugins for reliable New Zealand career workflows.",
+  "plugins": [
+    {
+      "name": "nz-job-scout",
+      "source": "./plugins/nz-job-scout",
+      "description": "Find, verify, and rank New Zealand jobs using a local CV or user-supplied search criteria.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}
