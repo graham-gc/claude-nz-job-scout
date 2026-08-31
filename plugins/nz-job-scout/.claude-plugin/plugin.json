@@ -1,0 +1,12 @@
+{
+  "name": "nz-job-scout",
+  "description": "Verified New Zealand job discovery and CV-based matching for Claude Code.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Yusi (Graham) Cheng"
+  },
+  "homepage": "https://github.com/graham-gc/claude-nz-job-scout",
+  "repository": "https://github.com/graham-gc/claude-nz-job-scout",
+  "license": "MIT",
+  "keywords": ["new-zealand", "jobs", "career", "cv", "seek", "linkedin"]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@graham-gc/nz-job-scout",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core utilities for the nz-job-scout Claude Code plugin.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": ">=22 <26",
+    "typescript": ">=5.7 <7",
+    "vitest": ">=3 <5"
+  }
+}
