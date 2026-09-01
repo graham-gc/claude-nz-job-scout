@@ -1,6 +1,6 @@
 ---
 name: nz-job-scout
-description: Use when the user wants to analyse a local PDF or Markdown CV, search for New Zealand jobs, verify job listings, compare role fit, or produce a Markdown job report.
+description: Use when the user wants to analyse a local PDF or Markdown CV, search publicly accessible New Zealand job sources, verify job listings, compare role fit, or produce a Markdown job report without authenticated accounts.
 ---
 
 # NZ Job Scout
@@ -35,20 +35,15 @@ Before searching, read `${CLAUDE_PLUGIN_ROOT}/skills/nz-job-scout/references/ses
 
 ## Workflow
 
-### 0. Automatic browser and session preflight
+### 0. Enforce the public-source boundary
 
-Session handling is internal behaviour. Do not ask the user whether to use their login state and do not require session-related wording in the request.
+Use only information that is anonymously accessible without an account, session, private browser profile, paid browser extension, or partner credential.
 
-1. Check whether interactive `claude-in-chrome` browser tools are available.
-2. If available, use the visible browser for SEEK, LinkedIn, Trade Me Jobs, and other JavaScript-heavy sites.
-3. If a requested site is already authenticated, use that existing browser session automatically.
-4. If the browser is unavailable, the site is logged out, or access is blocked by a login wall or CAPTCHA, do not request credentials and do not stop the whole search. Skip session-only behaviour and continue with publicly accessible employer career sites and ATS pages.
+Never request, inspect, accept, import, export, or persist cookies, passwords, access tokens, browser storage, user profiles, or SEEK Partner credentials. Do not ask the user to install Claude in Chrome or connect a logged-in browser.
 
-Record inaccessible sources as `blocked` or `unavailable` and classify overall coverage as `partial` when at least one primary public source was searched. Use `blocked` only when no primary source could be searched. Never silently label the run `complete` after skipping SEEK or LinkedIn.
+Do not use automated data gathering on a source that prohibits it. Public search snippets may identify leads, but they are not verification evidence. Prefer an employer's own careers site or public ATS page as both the evidence and final application link.
 
-The browser integration supplies access to visible pages under the user's existing login state. Never inspect, request, export, or persist cookies, passwords, tokens, local storage, or other authentication material.
-
-A Skill cannot install the browser extension or declare the user's browser login as a package dependency. Chrome support is an optional capability that improves coverage, not a user-selected search mode or a hard installation prerequisite.
+When a source returns a login wall, CAPTCHA, 401, 403, robots restriction, or access-denied response, stop using that source for the current run. Search for an anonymously accessible employer or ATS copy and record the original source as blocked or unavailable. Do not bypass, evade, or repeatedly retry the restriction.
 
 ### 1. Read and model the candidate
 
@@ -60,28 +55,25 @@ In `criteria` mode, do not claim to have assessed personal fit. Build the minima
 
 Resolve search scope before browsing. In `profile` mode, derive role families and useful query variants from sustained, recent work rather than every CV keyword. In `criteria` mode, preserve the user's constraints. In `combined` mode, explicit criteria constrain or override inferred preferences, while the CV determines experience-based ranking inside that scope.
 
-### 2. Search in the browser
+### 2. Search public sources
 
-- For SEEK and LinkedIn, use the interactive browser and the pages visible to the user.
-- Never use `WebFetch`, `Fetch`, `curl`, or another direct HTTP client on SEEK or LinkedIn job pages. These sites commonly return 403 or login walls to non-browser requests, and a successful raw response would not prove that the user's application route works.
-- Work through the existing browser session and visible page state; do not access authentication material directly.
+Search anonymously accessible primary sources first:
 
-Search direct sources first:
+- employer career websites;
+- public ATS pages, including Workday, Greenhouse, Lever, SmartRecruiters, Ashby, and BambooHR;
+- public sector and university career sites;
+- public job-board pages or feeds whose access rules allow the current research method.
 
-- SEEK New Zealand;
-- LinkedIn Jobs;
-- Trade Me Jobs;
-- employer career sites and their ATS pages.
+Use general web search to discover primary employer or ATS pages. SEEK, LinkedIn, Trade Me Jobs, aggregators, and search snippets may be discovery leads only when publicly indexed; never sign in or bypass a restriction to inspect them. Replace each lead with a currently accessible primary vacancy page before recommending it.
 
-A public web-search tool may be used to discover employer or ATS pages that can be opened normally. Search snippets and aggregator pages are leads only, not verification evidence. Replace every aggregator link with a currently open primary page before recommending it. Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
+Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
 
 Use this failure routing:
 
-1. On a 401, 403, login wall, CAPTCHA, or access-denied response, stop direct requests to that source immediately.
-2. Switch to the interactive browser if available.
-3. Otherwise search for a direct employer/ATS copy of the vacancy.
-4. If no primary page can be opened, record the lead as unverified or omit it. Never label the access error as an expired vacancy.
-5. After two consecutive search operations return no results, stop reformulating the same query family and report the coverage limitation.
+1. On a 401, 403, login wall, CAPTCHA, robots restriction, or access-denied response, stop requests to that source immediately.
+2. Search for a direct public employer or ATS copy of the vacancy.
+3. If no primary page can be opened anonymously, record the lead as unverified or omit it. Never label the access error as an expired vacancy.
+4. After two consecutive search operations return no results, stop reformulating the same query family and report the coverage limitation.
 
 Never claim that a listing was verified unless its exact detail page and application route were observed.
 
@@ -100,9 +92,9 @@ For every candidate vacancy, open the exact detail page and capture all required
 - verification time in `Pacific/Auckland` time;
 - availability and work-right compatibility only when supported by evidence.
 
-Also record every intended source and its search status. If SEEK returned 403 and no interactive browser was available, coverage is `blocked` unless another primary source was successfully searched. A blocked or partial run may still produce a diagnostic report, but it must not conclude that no suitable vacancies exist.
+Also record every intended public source and its search status. If a requested source blocks anonymous access, coverage is `partial` when another primary source was successfully searched and `blocked` when none was searched. A blocked or partial run may still produce a diagnostic report, but it must not conclude that no suitable vacancies exist.
 
-Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or raw browser state. Never bypass CAPTCHAs, rate limits, access controls, or site restrictions; skip the affected source and record the reduced coverage.
+Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or browser state. Never bypass CAPTCHAs, rate limits, access controls, robots restrictions, or site restrictions; skip the affected source and record the reduced coverage.
 
 ### 4. Validate and generate the report
 
@@ -131,11 +123,11 @@ Tell the user:
 - the absolute report path;
 - how many listings were reviewed, recommended, rejected, or unverified;
 - the strongest verified matches and their main blockers or gaps;
-- whether browser/login limitations affected coverage.
+- whether anonymous-access limitations affected coverage.
 
 Say “Today there are no new qualified vacancies” only when `searchCoverage.status` is `complete`. For `partial`, say that no roles were found among accessible sources and that coverage was incomplete. For `blocked`, say that the search could not be completed and no conclusion can be made about vacancy availability.
 
-When coverage is blocked because no primary source was accessible, finish with a diagnostic report. Do not ask the user to choose a session mode, provide credentials, or repeat the request with special session wording.
+When coverage is blocked because no public primary source was accessible, finish with a diagnostic report. Do not ask the user for credentials, a browser session, or special authenticated access.
 
 ## Search modes
 

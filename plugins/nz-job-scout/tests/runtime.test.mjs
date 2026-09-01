@@ -22,9 +22,9 @@ const candidate = {
 
 function activeJob(overrides = {}) {
   return {
-    source: 'SEEK',
-    sourceUrl: 'https://nz.seek.com/job/99900001?tracking=test',
-    applicationUrl: 'https://careers.example.com/jobs/NZ-101',
+    source: 'Employer careers site',
+    sourceUrl: 'https://careers.example.com/jobs/NZ-101?tracking=test',
+    applicationUrl: 'https://careers.example.com/jobs/NZ-101/apply',
     requisitionId: 'NZ-101',
     title: 'Software Test Engineer Intern',
     employer: 'Example Engineering',
@@ -66,8 +66,7 @@ function session(jobs = [activeJob()]) {
     },
     searchCoverage: {
       status: 'complete',
-      interactiveBrowserUsed: true,
-      sources: [{ name: 'SEEK', status: 'searched', note: 'Results and application routes opened in browser' }],
+      sources: [{ name: 'Employer careers site', status: 'searched', note: 'Public vacancy and application pages opened' }],
     },
     assumptions: ['Full-time hours are acceptable only during a scheduled study break.'],
     jobs,
@@ -123,10 +122,9 @@ test('does not report no vacancies when search access was blocked', () => {
   const blocked = session([]);
   blocked.searchCoverage = {
     status: 'blocked',
-    interactiveBrowserUsed: false,
     sources: [
-      { name: 'SEEK', status: 'blocked', note: '403 from direct request; no interactive browser available' },
-      { name: 'LinkedIn', status: 'unavailable', note: 'Interactive browser unavailable' },
+      { name: 'Employer careers site', status: 'blocked', note: '403 from anonymous request; source skipped' },
+      { name: 'Public ATS pages', status: 'unavailable', note: 'No public page could be opened' },
     ],
   };
   const markdown = renderMarkdown(buildReport(blocked, { now: '2026-09-01T10:00:00+12:00' }));

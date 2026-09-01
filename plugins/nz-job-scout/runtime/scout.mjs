@@ -203,7 +203,7 @@ function classifyEvidence(job, preferences, now) {
   try { hostname = new URL(job.sourceUrl).hostname.toLowerCase(); } catch { reasons.push('Source URL is invalid'); }
   if (BLOCKED_AGGREGATORS.some((domain) => hostname.includes(domain))) {
     status = 'rejected';
-    reasons.push('Final link is an aggregator rather than SEEK or a direct employer/ATS page');
+    reasons.push('Final link is an aggregator rather than a public direct employer/ATS page');
   }
   const evidence = job.verificationEvidence ?? {};
   if (evidence.expiredIndicatorVisible || evidence.unavailableIndicatorVisible) {

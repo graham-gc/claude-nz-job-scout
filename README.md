@@ -2,14 +2,14 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.2.4 alpha — usable interactive MVP.** Claude reads the CV and researches live pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
+> Status: **0.3.0 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
 
 ## What works now
 
 - reads a local Markdown or PDF CV through Claude;
 - models skill depth as core, frequent, working, or exposure;
 - automatically supports CV-driven, criteria-only, and combined searches;
-- can use an existing signed-in browser session without extracting credentials;
+- uses only job information available without authentication or private credentials;
 - requires the exact vacancy page and application route to be observed;
 - rejects expired, stale, duplicate, aggregator-only, and practically incompatible roles;
 - scores role fit separately from employment, location, availability, and work-right fit;
@@ -18,34 +18,26 @@ A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, 
 
 The default posting window is 30 days and can be overridden.
 
-## Automatic login-session handling
+## Public-source policy
 
-Users do not choose a session mode and do not need to mention Chrome in each request. On every run the Skill automatically:
+The Skill searches only sources that can be accessed without signing in. Its normal source set is:
 
-1. checks whether `claude-in-chrome` browser tools are available;
-2. uses the existing browser login automatically when the requested site is already signed in;
-3. never reads or stores cookies, passwords, access tokens, or browser storage;
-4. skips session-only access when Chrome is unavailable or the site is logged out, then continues with public employer and ATS pages;
-5. reports the resulting search coverage as complete, partial, or blocked.
+- employer career websites;
+- public ATS pages such as Workday, Greenhouse, Lever, SmartRecruiters, Ashby, and BambooHR;
+- public job-board pages and feeds where anonymous automated access is permitted;
+- general web search for discovering primary employer or ATS pages.
 
-Failure to obtain a logged-in session does not abort the entire search. It reduces coverage, and the report must disclose which sources were unavailable.
+SEEK, LinkedIn, or another job board may appear in public search results, but an indexed result is a discovery lead rather than final evidence. The Skill replaces it with an anonymously accessible employer or ATS vacancy page before recommending the role whenever possible.
 
-### Optional Chrome setup for broader coverage
+The Skill never asks for or uses:
 
-Chrome is not an installation prerequisite, but connecting it gives the Skill access to SEEK, LinkedIn, Trade Me Jobs, and other JavaScript-heavy pages under the user's existing login state.
+- account passwords;
+- cookies or exported browser sessions;
+- private browser profiles;
+- Claude in Chrome;
+- SEEK Partner credentials or other employer-only API credentials.
 
-1. Install and enable the official Claude in Chrome extension.
-2. Sign into the desired job sites normally in Chrome.
-3. Run `/chrome` in Claude Code and connect the extension.
-4. Run `/mcp` to confirm that `claude-in-chrome` is available.
-
-Alternatively, start the CLI with:
-
-```bash
-claude --chrome
-```
-
-See the official [Claude Code with Chrome documentation](https://code.claude.com/docs/en/chrome) for installation, permissions, and troubleshooting.
+If a source presents a login wall, CAPTCHA, 401, 403, or other access restriction, the Skill skips it, looks for a public employer copy, and records the coverage limitation. It does not attempt to bypass access controls.
 
 ## Install from GitHub
 
@@ -95,12 +87,10 @@ Provide both. Explicit criteria constrain the search, while the resume is used t
 
 Replace `<absolute-path-to-your-resume>` with the path to the user's own local resume. All three forms accept natural language; users do not need to declare a mode. The default posting window is 30 days, and every returned vacancy must still be open and directly verifiable.
 
-When Chrome is connected and a site is already signed in, the Skill uses that session automatically. Otherwise it continues without authenticated access and marks the reduced coverage in the report.
-
 ## How it works
 
 1. Claude infers the search mode from the supplied resume and/or criteria, then models the candidate when a resume is available.
-2. Claude searches and opens primary job pages in the browser.
+2. Claude discovers and opens anonymously accessible employer, ATS, and permitted public job pages.
 3. Claude creates a temporary evidence-session JSON.
 4. `nz-job-scout` validates, filters, deduplicates, scores, and writes the report.
 5. Claude returns the report path and explains the strongest matches and blockers.
@@ -111,18 +101,16 @@ Everything needed at runtime is included in the plugin. Users do **not** need to
 
 A recommended listing must have a directly opened job-detail page, no visible expired state, a working application route or current application instructions, a posting date inside the requested window, and a verification timestamp. Aggregators can be used only to discover leads; they cannot be final evidence.
 
-## SEEK or LinkedIn returns 403
+## A job board blocks anonymous access
 
-Do not retry those pages with `Fetch`, `WebFetch`, or `curl`. A 403 normally means the site rejected a non-browser request; it does not mean the vacancy has expired.
+The Skill stops using that source for the current run. It may use public search results to locate the employer's own vacancy page, but it does not retry with credentials, a browser session, or alternate scraping methods.
 
-The Skill automatically skips the blocked authenticated source and continues with accessible employer or ATS pages. Connecting Claude in Chrome can restore broader coverage, but it is not required to run the Skill.
-
-The plugin never asks for or extracts your cookies or login credentials.
+An access error does not prove that a vacancy has expired. The report records the source as blocked or unavailable and states whether search coverage was complete, partial, or blocked.
 
 ## Current boundaries
 
 - This is an interactive research workflow, not an unattended scheduled crawler.
-- Site coverage depends on pages that Claude can access; unavailable login-only or CAPTCHA-protected sources are skipped and disclosed.
+- Coverage is limited to sources that permit anonymous access; login-only and restricted sources are skipped and disclosed.
 - The standalone runtime does not parse PDFs; Claude reads them before creating the evidence session.
 - Website changes can require updates to the skill instructions.
 - The plugin does not apply, upload a CV, send messages, or submit personal information without explicit approval.

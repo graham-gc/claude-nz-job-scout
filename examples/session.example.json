@@ -26,15 +26,14 @@
   },
   "searchCoverage": {
     "status": "complete",
-    "interactiveBrowserUsed": true,
-    "sources": [{ "name": "SEEK", "status": "searched", "note": "Example browser verification" }]
+    "sources": [{ "name": "Employer careers site", "status": "searched", "note": "Example public-page verification" }]
   },
   "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],
   "jobs": [
     {
-      "source": "SEEK",
-      "sourceUrl": "https://nz.seek.com/job/99900001",
-      "applicationUrl": "https://careers.example.com/jobs/NZ-101",
+      "source": "Employer careers site",
+      "sourceUrl": "https://careers.example.com/jobs/NZ-101",
+      "applicationUrl": "https://careers.example.com/jobs/NZ-101/apply",
       "requisitionId": "NZ-101",
       "title": "Software Test Engineer Intern",
       "employer": "Example Engineering",

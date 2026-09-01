@@ -49,18 +49,17 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
   },
   "searchCoverage": {
     "status": "complete",
-    "interactiveBrowserUsed": true,
     "sources": [
-      { "name": "SEEK", "status": "searched", "note": "Results and application routes opened in browser" },
-      { "name": "Employer career sites", "status": "searched", "note": "Public ATS pages opened" }
+      { "name": "Employer career sites", "status": "searched", "note": "Public vacancy and application pages opened" },
+      { "name": "Public ATS pages", "status": "searched", "note": "Anonymous job-board pages opened" }
     ]
   },
   "assumptions": [],
   "jobs": [
     {
-      "source": "SEEK",
-      "sourceUrl": "https://nz.seek.com/job/12345678",
-      "applicationUrl": "https://employer.example/jobs/NZ-101",
+      "source": "Employer careers site",
+      "sourceUrl": "https://careers.example/jobs/NZ-101",
+      "applicationUrl": "https://careers.example/jobs/NZ-101/apply",
       "requisitionId": "NZ-101",
       "title": "Software Test Engineer Intern",
       "employer": "Example Employer",
@@ -107,7 +106,7 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
 - Use `partial` when at least one primary source was searched but another requested source was inaccessible.
 - Use `blocked` when no primary source was successfully searched. A blocked search is not evidence that no vacancies exist.
 - `complete` and `partial` require at least one source with `status: "searched"`.
-- Record concise access notes such as `403 from direct request; interactive browser unavailable`. Do not put access failures only in `assumptions`.
+- Record concise access notes such as `403 from anonymous request; source skipped`. Do not put access failures only in `assumptions`.
 - Never mark coverage complete from search-result snippets alone.
 
 ## Job evidence rules
@@ -119,6 +118,6 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
 - Set `applyRouteAvailable` only after observing an enabled apply control or explicit, current application instructions.
 - Set `expiredIndicatorVisible` or `unavailableIndicatorVisible` whenever the page shows such a state.
 - Use `availabilityCompatible` and `workRightsCompatible` only when the listing contains enough evidence. Omit the field if unknown; never turn uncertainty into `true`.
-- Never record cookies, access tokens, passwords, browser storage, CV contents beyond the candidate model, or unrelated personal data.
+- Never request or record cookies, access tokens, passwords, browser storage, partner credentials, CV contents beyond the candidate model, or unrelated personal data.
 
 The runtime rejects final links from known aggregation sites, stale listings, closed listings, duplicates, and roles with practical blockers. Unverified jobs remain in the rejection section rather than the recommendation table.
