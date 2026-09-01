@@ -2,7 +2,7 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.3.0 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
+> Status: **0.3.1 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
 
 ## What works now
 
@@ -41,20 +41,27 @@ If a source presents a login wall, CAPTCHA, 401, 403, or other access restrictio
 
 ## Install from GitHub
 
-Run these commands inside Claude Code:
+Run these commands in a **system terminal** such as macOS Terminal, iTerm, or the VS Code terminal. Do not enter them in Claude Code's `/plugin` screen.
+
+```bash
+claude plugin marketplace add graham-gc/claude-nz-job-scout
+claude plugin install nz-job-scout@graham-nz-tools
+```
+
+If the plugin is already installed, refresh the marketplace catalogue and then update the plugin from the system terminal:
+
+```bash
+claude plugin marketplace update graham-nz-tools
+claude plugin update nz-job-scout@graham-nz-tools
+```
+
+After installing or updating, start a new Claude Code session. If Claude Code is already running, enter this command **inside the Claude Code session**:
 
 ```text
-/plugin marketplace add graham-gc/claude-nz-job-scout
-/plugin install nz-job-scout@graham-nz-tools
 /reload-plugins
 ```
-If the plugin is already installed, refresh it after a new version has been pushed:
 
-```text
-/plugin marketplace update graham-nz-tools
-/plugin update nz-job-scout@graham-nz-tools
-/reload-plugins
-```
+Some Claude Code builds route `/plugin ...` input to the interactive plugin manager and ignore the remaining subcommand. The terminal commands above avoid that behaviour and are the recommended installation and update method for this plugin.
 
 Version changes are not loaded from the working repository automatically; Claude Code runs the cached installed version until it is updated and reloaded.
 
