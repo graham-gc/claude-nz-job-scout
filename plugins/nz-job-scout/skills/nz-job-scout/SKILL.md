@@ -1,6 +1,16 @@
 ---
 name: nz-job-scout
 description: Use when the user wants to analyse a local PDF or Markdown CV, search publicly accessible New Zealand job sources, verify job listings, compare role fit, or produce a Markdown job report without authenticated accounts.
+allowed-tools:
+  - Read
+  - Edit(.nz-job-scout-session-*.json)
+  - WebSearch
+  - WebFetch
+  - Bash(nz-job-scout validate *)
+  - Bash(nz-job-scout report *)
+  - Bash(node *nz-job-scout validate *)
+  - Bash(node *nz-job-scout report *)
+  - Bash(rm .nz-job-scout-session-*)
 ---
 
 # NZ Job Scout
@@ -96,6 +106,8 @@ Also record every intended public source and its search status. If a requested s
 
 Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or browser state. Never bypass CAPTCHAs, rate limits, access controls, robots restrictions, or site restrictions; skip the affected source and record the reduced coverage.
 
+Use `.nz-job-scout-session-<timestamp>.json` in the user's current project directory for the temporary evidence file. This predictable, private-to-the-run filename keeps write and cleanup permission narrowly scoped. Do not place the temporary file in the plugin directory or use another location unless the user explicitly requests it.
+
 ### 4. Validate and generate the report
 
 Run the bundled, dependency-free runtime. Quote all paths.
@@ -114,7 +126,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/
 
 The runtime is authoritative for evidence validation, stale-listing rejection, deduplication, role-fit scoring, practical blockers, and Markdown formatting. Do not hand-edit scores to make a result look stronger. If validation fails, correct the evidence JSON rather than bypassing validation.
 
-Unless the user requests another location, write to `output/nz-jobs-YYYY-MM-DD.md` under the user's project directory. Remove the temporary session file after a successful report unless the user asks to keep the evidence.
+Unless the user requests another location, write to `output/nz-jobs-YYYY-MM-DD.md` under the user's project directory. After a successful report, remove the temporary session file with `rm .nz-job-scout-session-<timestamp>.json` unless the user asks to keep the evidence. Never use a wildcard in the actual cleanup command.
 
 ### 5. Return the result
 

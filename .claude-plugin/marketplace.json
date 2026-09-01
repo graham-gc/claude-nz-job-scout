@@ -9,7 +9,7 @@
       "name": "nz-job-scout",
       "source": "./plugins/nz-job-scout",
       "description": "Find, verify, and rank publicly accessible New Zealand jobs using a local CV or user-supplied search criteria.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "productivity"
     }
   ]
