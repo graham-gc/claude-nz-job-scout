@@ -2,7 +2,7 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.3.1 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
+> Status: **0.3.2 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
 
 ## What works now
 
@@ -64,6 +64,21 @@ After installing or updating, start a new Claude Code session. If Claude Code is
 Some Claude Code builds route `/plugin ...` input to the interactive plugin manager and ignore the remaining subcommand. The terminal commands above avoid that behaviour and are the recommended installation and update method for this plugin.
 
 Version changes are not loaded from the working repository automatically; Claude Code runs the cached installed version until it is updated and reloaded.
+
+### Web access permission
+
+NZ Job Scout pre-approves only the tools required by its routine workflow: reading the supplied resume, searching and fetching public pages, writing its narrowly named temporary evidence file, running the bundled validator and report generator, and deleting that temporary file. After the user accepts the plugin trust prompt, these routine actions do not require approval one by one.
+
+This permission:
+
+- applies only while this Skill is active;
+- does not grant access to logged-in sessions, cookies, or private browser data;
+- restricts shell approval to the bundled validation/report commands and cleanup of the Skill's temporary evidence file;
+- can be inspected or revoked at any time with `/permissions` inside Claude Code.
+
+A separate prompt can still appear when the resume is outside Claude Code's current working directories, the user chooses a non-default output location, or a managed organisational policy requires confirmation. The Skill does not and cannot bypass those boundaries.
+
+Users who do not trust these permissions should not install or invoke the Skill. Claude Code permission deny rules and managed organisational policies always take precedence.
 
 
 Then invoke the namespaced skill:

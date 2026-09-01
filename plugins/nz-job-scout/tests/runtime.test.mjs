@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -136,7 +136,67 @@ test('writes the report to disk', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-'));
   const input = join(folder, 'session.json');
   const output = join(folder, 'report.md');
-  await import('node:fs/promises').then(({ writeFile }) => writeFile(input, JSON.stringify(session()), 'utf8'));
+  await writeFile(input, JSON.stringify(session()), 'utf8');
   await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' });
   assert.match(await readFile(output, 'utf8'), /Software Test Engineer Intern/);
+});
+
+test('appends only new jobs to an existing same-day report and leaves it unchanged when there are no new jobs', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-same-day-'));
+  const input = join(folder, 'session.json');
+  const output = join(folder, 'nz-jobs-2026-09-01.md');
+  const secondJob = activeJob({
+    sourceUrl: 'https://careers.example.net/jobs/NZ-202',
+    applicationUrl: 'https://careers.example.net/jobs/NZ-202/apply',
+    requisitionId: 'NZ-202',
+    title: 'Java Backend Intern',
+    employer: 'Second Engineering',
+  });
+
+  await writeFile(input, JSON.stringify(session()), 'utf8');
+  const first = await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(first.writeAction, 'created');
+  const original = await readFile(output, 'utf8');
+  const originalFirstRoleCount = original.split('Software Test Engineer Intern').length - 1;
+
+  await writeFile(input, JSON.stringify(session([activeJob(), secondJob])), 'utf8');
+  const second = await writeReport(input, output, { now: '2026-09-01T14:00:00+12:00' });
+  assert.equal(second.writeAction, 'appended');
+  assert.equal(second.excludedPreviouslyReported, 1);
+  const updated = await readFile(output, 'utf8');
+  assert.ok(updated.startsWith(original));
+  assert.match(updated, /## Incremental scan/);
+  assert.match(updated, /Java Backend Intern/);
+  assert.equal(updated.split('Software Test Engineer Intern').length - 1, originalFirstRoleCount);
+
+  const third = await writeReport(input, output, { now: '2026-09-01T18:00:00+12:00' });
+  assert.equal(third.writeAction, 'unchanged');
+  assert.equal(third.excludedPreviouslyReported, 2);
+  assert.equal(await readFile(output, 'utf8'), updated);
+});
+
+test('excludes jobs from earlier daily reports when creating the next day report', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-next-day-'));
+  const input = join(folder, 'session.json');
+  const firstOutput = join(folder, 'nz-jobs-2026-09-01.md');
+  const nextOutput = join(folder, 'nz-jobs-2026-09-02.md');
+  const nextJob = activeJob({
+    sourceUrl: 'https://careers.example.org/jobs/NZ-303',
+    applicationUrl: 'https://careers.example.org/jobs/NZ-303/apply',
+    requisitionId: 'NZ-303',
+    title: 'API Automation Intern',
+    employer: 'Next Day Systems',
+  });
+
+  await writeFile(input, JSON.stringify(session()), 'utf8');
+  await writeReport(input, firstOutput, { now: '2026-09-01T10:00:00+12:00' });
+  await writeFile(input, JSON.stringify(session([activeJob(), nextJob])), 'utf8');
+  const result = await writeReport(input, nextOutput, { now: '2026-09-02T09:00:00+12:00' });
+  const markdown = await readFile(nextOutput, 'utf8');
+
+  assert.equal(result.writeAction, 'created');
+  assert.equal(result.excludedPreviouslyReported, 1);
+  assert.doesNotMatch(markdown, /Software Test Engineer Intern/);
+  assert.match(markdown, /API Automation Intern/);
+  assert.match(markdown, /Previously reported listings excluded: 1/);
 });

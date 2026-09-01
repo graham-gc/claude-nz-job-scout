@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
@@ -19,6 +19,23 @@ const asArray = (value) => Array.isArray(value) ? value : [];
 const clamp = (value, min = 0, max = 10) => Math.max(min, Math.min(max, value));
 const round1 = (value) => Math.round(value * 10) / 10;
 const normalise = (value) => asText(value).toLowerCase().replace(/[^a-z0-9+#.]+/g, ' ').trim();
+const DAILY_REPORT_PATTERN = /^nz-jobs-(\d{4}-\d{2}-\d{2})\.md$/;
+
+function aucklandDateKey(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const part = (type) => parts.find((entry) => entry.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function shiftDateKey(value, days) {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
 
 function parseDate(value, label) {
   if (!value) return undefined;
@@ -46,6 +63,84 @@ export function normaliseUrl(value) {
   } catch {
     return asText(value);
   }
+}
+
+function jobIdentityKeys(job) {
+  const keys = [];
+  const applicationUrl = normaliseUrl(job.applicationUrl);
+  const sourceUrl = normaliseUrl(job.sourceUrl);
+  if (applicationUrl) keys.push(`url:${applicationUrl}`);
+  if (sourceUrl) keys.push(`url:${sourceUrl}`);
+  if (job.requisitionId) keys.push(`req:${normalise(job.employer)}:${normalise(job.requisitionId)}`);
+  const employer = normalise(job.employer);
+  const title = normalise(job.title);
+  const location = normalise(job.location);
+  if (employer && title) {
+    keys.push(`role:${employer}|${title}|${location}`);
+    keys.push(`role-loose:${employer}|${title}`);
+  }
+  return keys;
+}
+
+export function extractReportedIdentities(markdown) {
+  const identities = new Set();
+  for (const match of markdown.matchAll(/\((https?:\/\/[^)\s]+)\)/g)) {
+    const url = normaliseUrl(match[1]);
+    if (url) identities.add(`url:${url}`);
+  }
+  for (const line of markdown.split('\n')) {
+    if (!line.startsWith('|') || /^\|\s*-+/.test(line)) continue;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3 || normalise(cells[0]) === 'role') continue;
+    const location = cells[2].split(' / ')[0];
+    identities.add(`role:${normalise(cells[1])}|${normalise(cells[0])}|${normalise(location)}`);
+  }
+  const rolePatterns = [
+    /^#{3,4}\s+(?:\d+\.\s+)?(.+?)\s+—\s+(.+?)\s*$/gm,
+    /^-\s+\*\*(.+?)\s+—\s+(.+?)\*\*/gm,
+  ];
+  for (const pattern of rolePatterns) {
+    for (const match of markdown.matchAll(pattern)) {
+      identities.add(`role-loose:${normalise(match[2])}|${normalise(match[1])}`);
+    }
+  }
+  return identities;
+}
+
+async function readTextIfPresent(path) {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+async function loadReportHistory(outputPath, now, maxPostingAgeDays) {
+  const target = resolve(outputPath);
+  const folder = dirname(target);
+  const today = aucklandDateKey(now);
+  const earliest = shiftDateKey(today, -Math.max(1, Number(maxPostingAgeDays ?? 30)));
+  let names = [];
+  try {
+    names = await readdir(folder);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const reportPaths = new Set([target]);
+  for (const name of names) {
+    const match = DAILY_REPORT_PATTERN.exec(name);
+    if (match && match[1] >= earliest && match[1] <= today) reportPaths.add(join(folder, name));
+  }
+  const identities = new Set();
+  let currentMarkdown;
+  for (const path of reportPaths) {
+    const markdown = await readTextIfPresent(path);
+    if (markdown === undefined) continue;
+    if (path === target) currentMarkdown = markdown;
+    for (const identity of extractReportedIdentities(markdown)) identities.add(identity);
+  }
+  return { identities, currentMarkdown };
 }
 
 function requiredString(value, path, errors) {
@@ -320,7 +415,8 @@ export function buildReport(session, options = {}) {
     preferences: session.preferences,
     searchCoverage: session.searchCoverage,
     assumptions: asArray(session.assumptions),
-    searchedCount: session.jobs.length,
+    searchedCount: options.searchedCount ?? session.jobs.length,
+    excludedPreviouslyReported: options.excludedPreviouslyReported ?? 0,
     recommended,
     rejected,
   };
@@ -361,6 +457,7 @@ export function renderMarkdown(report) {
     `- Locations: ${asArray(report.preferences.locations).join(', ') || 'not specified'}`,
     `- Work arrangements: ${asArray(report.preferences.workArrangements).join(', ') || 'not specified'}`,
     `- Listings reviewed: ${report.searchedCount}`,
+    `- Previously reported listings excluded: ${report.excludedPreviouslyReported ?? 0}`,
     `- Search coverage: ${coverage.status}`,
     '',
     '### Source coverage',
@@ -430,16 +527,56 @@ export function renderMarkdown(report) {
   return `${lines.join('\n')}\n`;
 }
 
+export function renderIncrementalMarkdown(report) {
+  const lines = renderMarkdown(report).trimEnd().split('\n');
+  const body = lines.slice(4).map((line) => {
+    if (line.startsWith('### ')) return `#### ${line.slice(4)}`;
+    if (line.startsWith('## ')) return `### ${line.slice(3)}`;
+    return line;
+  });
+  return [
+    '---',
+    '',
+    `## Incremental scan — ${formatAucklandTime(report.generatedAt)}`,
+    '',
+    ...body,
+    '',
+  ].join('\n');
+}
+
 export async function readSession(inputPath) {
   return JSON.parse(await readFile(resolve(inputPath), 'utf8'));
 }
 
 export async function writeReport(inputPath, outputPath, options = {}) {
   const session = await readSession(inputPath);
-  const report = buildReport(session, options);
-  const markdown = renderMarkdown(report);
-  await mkdir(dirname(resolve(outputPath)), { recursive: true });
-  await writeFile(resolve(outputPath), markdown, 'utf8');
+  const now = options.now ? new Date(options.now) : new Date();
+  const target = resolve(outputPath);
+  const history = await loadReportHistory(target, now, session.preferences.maxPostingAgeDays);
+  const newJobs = session.jobs.filter((job) => !jobIdentityKeys(job).some((key) => history.identities.has(key)));
+  const excludedPreviouslyReported = session.jobs.length - newJobs.length;
+  const report = buildReport(
+    { ...session, jobs: newJobs },
+    {
+      ...options,
+      now,
+      searchedCount: session.jobs.length,
+      excludedPreviouslyReported,
+    },
+  );
+  report.newListingsCount = newJobs.length;
+  await mkdir(dirname(target), { recursive: true });
+  if (history.currentMarkdown !== undefined) {
+    if (!newJobs.length) {
+      report.writeAction = 'unchanged';
+      return report;
+    }
+    await appendFile(target, `\n${renderIncrementalMarkdown(report)}`, 'utf8');
+    report.writeAction = 'appended';
+    return report;
+  }
+  await writeFile(target, renderMarkdown(report), 'utf8');
+  report.writeAction = 'created';
   return report;
 }
 
@@ -487,7 +624,12 @@ export async function runCli(argv = process.argv.slice(2)) {
     if (args.command === 'report') {
       if (!args.output) throw new Error('--output is required for report');
       const report = await writeReport(args.input, args.output);
-      console.log(`Report written to ${resolve(args.output)} (${report.recommended.length} verified recommendation(s), ${report.rejected.length} rejected/unverified)`);
+      if (report.writeAction === 'unchanged') {
+        console.log(`No new listings; existing report left unchanged: ${resolve(args.output)} (${report.excludedPreviouslyReported} previously reported)`);
+      } else {
+        const action = report.writeAction === 'appended' ? 'updated incrementally' : 'created';
+        console.log(`Report ${action}: ${resolve(args.output)} (${report.recommended.length} new verified recommendation(s), ${report.rejected.length} new rejected/unverified, ${report.excludedPreviouslyReported} previously reported)`);
+      }
       return 0;
     }
     throw new Error(`Unknown command: ${args.command}`);
