@@ -35,7 +35,24 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
         "lastUsedYear": 2026,
         "evidence": ["Built and maintained production-facing test tooling"]
       }
-    ]
+    ],
+    "capabilities": [
+      {
+        "name": "API test automation",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2026,
+        "evidence": ["Designed and delivered an API automation platform"]
+      },
+      {
+        "name": "backend development",
+        "level": "frequent",
+        "years": 4,
+        "lastUsedYear": 2026,
+        "evidence": ["Implemented Spring Boot services and relational persistence"]
+      }
+    ],
+    "qualifications": ["Bachelor of Engineering", "Master of Information Technology in progress"]
   },
   "preferences": {
     "mode": "profile",
@@ -49,6 +66,10 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
   },
   "searchCoverage": {
     "status": "complete",
+    "searchFamilies": ["software test engineering", "Java backend", "developer productivity"],
+    "queriesRun": 6,
+    "leadsDiscovered": 12,
+    "detailPagesOpened": 5,
     "sources": [
       { "name": "Employer career sites", "status": "searched", "note": "Public vacancy and application pages opened" },
       { "name": "Public ATS pages", "status": "searched", "note": "Anonymous job-board pages opened" }
@@ -74,8 +95,14 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
       "postedAt": "2026-08-30",
       "closesAt": "2026-09-20",
       "summary": "API and backend quality engineering work",
+      "roleFamilies": ["software test engineering", "backend engineering"],
+      "responsibilityAreas": ["API test automation", "backend debugging", "test framework development"],
+      "domains": ["software quality", "developer productivity"],
       "requiredSkills": ["Java", "API automation"],
       "preferredSkills": ["SQL"],
+      "eligibilityRequirements": ["Currently studying a New Zealand tertiary qualification"],
+      "eligibilityCompatible": true,
+      "selectionRisks": [],
       "verificationEvidence": {
         "detailPageOpened": true,
         "applyRouteAvailable": true,
@@ -93,15 +120,20 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
 
 - `preferences.mode` must be `profile`, `criteria`, or `combined`.
 - `skills[].level` must be `core`, `frequent`, `working`, or `exposure`.
+- `skills` contains concrete technologies, languages, frameworks, protocols, and tools. `capabilities` contains sustained work such as backend development, test automation, performance testing, production troubleshooting, internal tooling, or stakeholder delivery.
 - Set the level from duration, frequency, recency, ownership, and delivery evidence—not from keyword presence.
+- A capability must be supported by work the candidate actually performed. Do not infer AI/ML, cloud, frontend, mobile, or another specialty from a nearby keyword.
 - `years` can be fractional. Do not invent a number when the CV does not support one.
 - Preserve visa wording accurately. Do not convert a temporary student work right into unrestricted work rights.
 
 ## Search coverage rules
 
 - `searchCoverage` is required even when `jobs` is empty.
+- `searchFamilies`, `queriesRun`, `leadsDiscovered`, and `detailPagesOpened` are required. They distinguish a narrow or blocked run from a meaningful market scan.
+- In profile or combined mode, search each materially distinct role family derived from sustained experience. Finding one verified role is not a stopping condition.
 - `status` is `complete`, `partial`, or `blocked`.
-- A source status is `searched`, `blocked`, `unavailable`, or `skipped`.
+- A source status is `searched`, `discovery-only`, `blocked`, `unavailable`, or `skipped`.
+- Use `discovery-only` when public search results or snippets were accessible but the exact detail/application page could not be verified.
 - Use `complete` only when the intended primary sources were successfully searched and vacancy pages could be opened.
 - Use `partial` when at least one primary source was searched but another requested source was inaccessible.
 - Use `blocked` when no primary source was successfully searched. A blocked search is not evidence that no vacancies exist.
@@ -112,6 +144,11 @@ In `combined` mode, values in `preferences` represent explicit user constraints 
 ## Job evidence rules
 
 - `sourceUrl` is the detail page that was actually opened.
+- `roleFamilies` and `responsibilityAreas` must be derived from the work described in the JD, not merely from its title.
+- Put only concrete technologies and hands-on technical practices in `requiredSkills` and `preferredSkills`.
+- Put degree, NZQA level, current-student status, work rights, residency, availability, and similar screening rules in `eligibilityRequirements`, never in `requiredSkills`.
+- Set `eligibilityCompatible` only after comparing the visible eligibility requirement with supported candidate evidence. Omit it when uncertain.
+- `selectionRisks` is for evidence-based non-blocking cautions, such as a clearly different technical specialism. Do not speculate about age, personality, or unlawful criteria.
 - `applicationUrl` is the employer or ATS application destination when available.
 - Dates use ISO 8601. Use `YYYY-MM-DD` when only a date is visible.
 - Set `detailPageOpened` only after the exact vacancy page opens.

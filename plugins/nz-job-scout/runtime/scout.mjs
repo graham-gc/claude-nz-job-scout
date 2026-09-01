@@ -5,6 +5,21 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
+const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
+const CONCEPT_GROUPS = [
+  ['software engineering', 'software development', 'software product development', 'application development'],
+  ['backend engineering', 'backend development', 'server side development', 'api development', 'rest api development', 'microservices'],
+  ['test automation', 'automated testing', 'api automation', 'software testing', 'quality engineering', 'sdet'],
+  ['platform engineering', 'developer productivity', 'engineering productivity', 'developer tooling', 'internal tools'],
+  ['performance testing', 'load testing', 'performance engineering'],
+  ['full stack development', 'web application development', 'frontend and backend development'],
+  ['debugging', 'troubleshooting', 'root cause analysis', 'production support'],
+  ['sql', 'relational databases', 'database development'],
+];
+const GENERIC_ROLE_TOKENS = new Set([
+  'engineer', 'engineering', 'developer', 'development', 'intern', 'internship',
+  'graduate', 'junior', 'senior', 'software',
+]);
 const BLOCKED_AGGREGATORS = [
   'bebee.',
   'ziprecruiter.',
@@ -147,6 +162,32 @@ function requiredString(value, path, errors) {
   if (!asText(value)) errors.push(`${path} is required`);
 }
 
+function phraseTokens(value) {
+  return normalise(value).split(' ').filter((token) => token && !GENERIC_ROLE_TOKENS.has(token));
+}
+
+function conceptGroup(value) {
+  const text = normalise(value);
+  return CONCEPT_GROUPS.findIndex((group) => group.some((term) => text.includes(term)));
+}
+
+function semanticSimilarity(left, right) {
+  const a = normalise(left);
+  const b = normalise(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const shorter = Math.min(a.length, b.length);
+  const longer = Math.max(a.length, b.length);
+  if ((a.includes(b) || b.includes(a)) && shorter >= 5 && shorter / longer >= 0.6) return 0.9;
+  const aGroup = conceptGroup(a);
+  if (aGroup >= 0 && aGroup === conceptGroup(b)) return 0.82;
+  const aTokens = new Set(phraseTokens(a));
+  const bTokens = new Set(phraseTokens(b));
+  if (!aTokens.size || !bTokens.size) return 0;
+  const intersection = [...aTokens].filter((token) => bTokens.has(token)).length;
+  return intersection / Math.max(aTokens.size, bTokens.size);
+}
+
 export function validateSession(session) {
   const errors = [];
   if (!session || typeof session !== 'object' || Array.isArray(session)) {
@@ -165,7 +206,7 @@ export function validateSession(session) {
     errors.push('searchCoverage is required');
   } else {
     const coverageStatuses = new Set(['complete', 'partial', 'blocked']);
-    const sourceStatuses = new Set(['searched', 'blocked', 'unavailable', 'skipped']);
+    const sourceStatuses = new Set(['searched', 'discovery-only', 'blocked', 'unavailable', 'skipped']);
     if (!coverageStatuses.has(session.searchCoverage.status)) {
       errors.push('searchCoverage.status must be complete, partial, or blocked');
     }
@@ -178,13 +219,32 @@ export function validateSession(session) {
     });
     const searchedSources = asArray(session.searchCoverage.sources).filter((source) => source.status === 'searched');
     if (session.searchCoverage.status !== 'blocked' && searchedSources.length === 0) errors.push('complete or partial coverage requires at least one searched source');
+    if (!Array.isArray(session.searchCoverage.searchFamilies) || session.searchCoverage.searchFamilies.length === 0) {
+      errors.push('searchCoverage.searchFamilies must record at least one role/query family');
+    }
+    if (!Number.isInteger(session.searchCoverage.queriesRun) || session.searchCoverage.queriesRun < 1) {
+      errors.push('searchCoverage.queriesRun must be a positive integer');
+    }
+    if (!Number.isInteger(session.searchCoverage.leadsDiscovered) || session.searchCoverage.leadsDiscovered < 0) {
+      errors.push('searchCoverage.leadsDiscovered must be a non-negative integer');
+    }
+    if (!Number.isInteger(session.searchCoverage.detailPagesOpened) || session.searchCoverage.detailPagesOpened < 0) {
+      errors.push('searchCoverage.detailPagesOpened must be a non-negative integer');
+    }
   }
   if (session.candidate) {
     if (!Array.isArray(session.candidate.skills)) errors.push('candidate.skills must be an array');
+    if (!Array.isArray(session.candidate.capabilities)) errors.push('candidate.capabilities must be an array');
     asArray(session.candidate.skills).forEach((skill, index) => {
       requiredString(skill?.name, `candidate.skills[${index}].name`, errors);
       if (!Object.hasOwn(LEVEL_WEIGHT, skill?.level)) {
         errors.push(`candidate.skills[${index}].level must be core, frequent, working, or exposure`);
+      }
+    });
+    asArray(session.candidate.capabilities).forEach((capability, index) => {
+      requiredString(capability?.name, `candidate.capabilities[${index}].name`, errors);
+      if (!Object.hasOwn(LEVEL_WEIGHT, capability?.level)) {
+        errors.push(`candidate.capabilities[${index}].level must be core, frequent, working, or exposure`);
       }
     });
   }
@@ -193,50 +253,84 @@ export function validateSession(session) {
     requiredString(job?.employer, `jobs[${index}].employer`, errors);
     requiredString(job?.sourceUrl, `jobs[${index}].sourceUrl`, errors);
     requiredString(job?.verificationEvidence?.verifiedAt, `jobs[${index}].verificationEvidence.verifiedAt`, errors);
+    if (!Array.isArray(job?.roleFamilies) || job.roleFamilies.length === 0) errors.push(`jobs[${index}].roleFamilies must contain at least one duty-derived role family`);
+    if (!Array.isArray(job?.responsibilityAreas) || job.responsibilityAreas.length === 0) errors.push(`jobs[${index}].responsibilityAreas must contain at least one responsibility`);
+    if (!Array.isArray(job?.requiredSkills)) errors.push(`jobs[${index}].requiredSkills must be an array`);
+    if (!Array.isArray(job?.preferredSkills)) errors.push(`jobs[${index}].preferredSkills must be an array`);
+    if (!Array.isArray(job?.eligibilityRequirements)) errors.push(`jobs[${index}].eligibilityRequirements must be an array`);
+    asArray(job?.requiredSkills).forEach((skill, skillIndex) => {
+      if (ELIGIBILITY_REQUIREMENT.test(asText(skill))) {
+        errors.push(`jobs[${index}].requiredSkills[${skillIndex}] is an eligibility requirement; move it to eligibilityRequirements`);
+      }
+    });
   });
   return { valid: errors.length === 0, errors };
 }
 
-function skillMatch(requiredSkill, candidateSkills, nowYear) {
+function skillMatch(requiredSkill, candidateEvidence, nowYear) {
   const requirement = normalise(requiredSkill);
   if (!requirement) return undefined;
-  const match = candidateSkills.find((skill) => {
-    const candidate = normalise(skill.name);
-    return candidate === requirement || candidate.includes(requirement) || requirement.includes(candidate);
-  });
+  const match = candidateEvidence
+    .map((item) => ({ item, similarity: semanticSimilarity(requirement, item.name) }))
+    .filter(({ similarity }) => similarity >= 0.5)
+    .sort((a, b) => b.similarity - a.similarity)[0];
   if (!match) return undefined;
-  const level = LEVEL_WEIGHT[match.level] ?? 0;
-  const years = Number(match.years ?? 0);
+  const level = LEVEL_WEIGHT[match.item.level] ?? 0;
+  const years = Number(match.item.years ?? 0);
   const yearsFactor = years > 0 ? clamp(0.55 + Math.log2(years + 1) * 0.16, 0.55, 1) : 0.65;
-  const lastUsed = Number(match.lastUsedYear ?? nowYear);
+  const lastUsed = Number(match.item.lastUsedYear ?? nowYear);
   const recency = lastUsed >= nowYear - 1 ? 1 : lastUsed >= nowYear - 3 ? 0.85 : 0.65;
-  return { skill: match, score: level * yearsFactor * recency };
+  return { skill: match.item, score: level * yearsFactor * recency * match.similarity };
+}
+
+function bestSemanticMatch(values, targets) {
+  let best = 0;
+  for (const value of asArray(values)) {
+    for (const target of asArray(targets)) best = Math.max(best, semanticSimilarity(value, target));
+  }
+  return best;
 }
 
 function scoreRole(job, candidate, now) {
   const required = asArray(job.requiredSkills);
   const preferred = asArray(job.preferredSkills);
-  const skills = asArray(candidate.skills);
+  const responsibilities = asArray(job.responsibilityAreas);
+  const evidenceItems = [...asArray(candidate.skills), ...asArray(candidate.capabilities)];
   const nowYear = now.getFullYear();
-  const requiredMatches = required.map((name) => ({ name, match: skillMatch(name, skills, nowYear) }));
-  const preferredMatches = preferred.map((name) => ({ name, match: skillMatch(name, skills, nowYear) }));
+  const requiredMatches = required.map((name) => ({ name, match: skillMatch(name, evidenceItems, nowYear) }));
+  const preferredMatches = preferred.map((name) => ({ name, match: skillMatch(name, evidenceItems, nowYear) }));
+  const responsibilityMatches = responsibilities.map((name) => ({ name, match: skillMatch(name, evidenceItems, nowYear) }));
   const requiredScore = required.length
     ? requiredMatches.reduce((sum, item) => sum + (item.match?.score ?? 0), 0) / required.length
-    : 0.65;
+    : 0.55;
   const preferredScore = preferred.length
     ? preferredMatches.reduce((sum, item) => sum + (item.match?.score ?? 0), 0) / preferred.length
     : requiredScore;
-  const roleText = normalise(`${job.title} ${job.summary ?? ''}`);
-  const familyHit = asArray(candidate.targetRoleFamilies).some((family) => {
-    const phrase = normalise(family);
-    return phrase && (roleText.includes(phrase) || phrase.split(' ').some((part) => part.length > 4 && roleText.includes(part)));
-  });
-  const domainHit = asArray(candidate.domains).some((domain) => roleText.includes(normalise(domain)));
-  const score = requiredScore * 6.8 + preferredScore * 1.2 + (familyHit ? 1.4 : 0.5) + (domainHit ? 0.6 : 0);
-  const evidence = requiredMatches
+  const responsibilityScore = responsibilities.length
+    ? responsibilityMatches.reduce((sum, item) => sum + (item.match?.score ?? 0), 0) / responsibilities.length
+    : 0.45;
+  const familyScore = bestSemanticMatch(job.roleFamilies, candidate.targetRoleFamilies);
+  const domainScore = bestSemanticMatch(job.domains, candidate.domains);
+  const score = requiredScore * 4 + preferredScore + responsibilityScore * 3.5 + familyScore + domainScore * 0.5;
+  const evidence = [...requiredMatches, ...responsibilityMatches]
     .filter((item) => item.match)
-    .map((item) => `${item.name}: ${item.match.skill.level}${item.match.skill.years ? `, ${item.match.skill.years} years` : ''}`);
+    .map((item) => `${item.name}: supported by ${item.match.skill.name} (${item.match.skill.level}${item.match.skill.years ? `, ${item.match.skill.years} years` : ''})`);
   const gaps = requiredMatches.filter((item) => !item.match).map((item) => item.name);
+  if (!required.length) gaps.push('No concrete required technologies were stated; score relies on responsibilities and transferable capabilities');
+  return { score: round1(clamp(score)), evidence: [...new Set(evidence)], gaps };
+}
+
+function scoreCriteriaRole(job, candidate, preferences) {
+  const targets = [...asArray(preferences.keywords), ...asArray(candidate.targetRoleFamilies)];
+  const familyScore = bestSemanticMatch([...asArray(job.roleFamilies), job.title], targets);
+  const responsibilityScore = bestSemanticMatch(job.responsibilityAreas, targets);
+  const score = familyScore * 7 + responsibilityScore * 3;
+  const evidence = [];
+  if (familyScore > 0) evidence.push('Duty-derived role family matches the requested role criteria');
+  if (responsibilityScore > 0) evidence.push('Advertised responsibilities overlap the requested criteria');
+  const gaps = targets.length && familyScore === 0
+    ? ['No duty-derived role family matched the requested criteria']
+    : [];
   return { score: round1(clamp(score)), evidence, gaps };
 }
 
@@ -251,44 +345,76 @@ function includesNormalised(values, value) {
 function scorePractical(job, candidate, preferences) {
   const blockers = [];
   const positives = [];
-  let score = 10;
+  const cautions = [];
+  let score = 0;
   const requestedTypes = asArray(preferences.employmentTypes).length
     ? preferences.employmentTypes
     : candidate.employmentTypes;
   if (job.engagementModel && normalise(job.engagementModel) !== 'employee') {
     blockers.push(`Engagement model is ${job.engagementModel}, not employee employment`);
-    score -= 7;
   }
   if (job.employmentType && !includesNormalised(requestedTypes, job.employmentType)) {
     blockers.push(`Employment type ${job.employmentType} is outside the requested types`);
-    score -= 5;
-  } else if (job.employmentType) positives.push(`Employment type: ${job.employmentType}`);
+  } else if (job.employmentType) {
+    positives.push(`Employment type: ${job.employmentType}`);
+    score += 2;
+  } else {
+    cautions.push('Employment type is not stated');
+    score += 0.75;
+  }
   const remote = normalise(job.workArrangement) === 'remote';
   const allowedLocation = includesNormalised(preferences.locations ?? candidate.locations, job.location);
   if (!allowedLocation && !remote) {
     blockers.push(`Location ${job.location || 'unknown'} is outside the requested area and is not fully remote`);
-    score -= 6;
-  } else if (remote || allowedLocation) positives.push(remote ? 'Fully remote' : `Location: ${job.location}`);
+  } else if (remote || allowedLocation) {
+    positives.push(remote ? 'Fully remote' : `Location: ${job.location}`);
+    score += 1.25;
+  }
   if (job.workArrangement && !includesNormalised(preferences.workArrangements ?? candidate.workArrangements, job.workArrangement)) {
     blockers.push(`Work arrangement ${job.workArrangement} is outside the requested arrangements`);
-    score -= 4;
+  } else if (job.workArrangement) {
+    positives.push(`Work arrangement: ${job.workArrangement}`);
+    score += 0.75;
+  } else {
+    cautions.push('Work arrangement is not stated');
+    score += 0.35;
   }
   const maxHours = Number(preferences.maxHoursPerWeekDuringStudy ?? 0);
   if (maxHours && Number(job.hoursPerWeek) > maxHours && job.duringScheduledBreak !== true) {
     blockers.push(`${job.hoursPerWeek} hours/week exceeds the ${maxHours}-hour study-period limit`);
-    score -= 6;
   }
   if (job.availabilityCompatible === false) {
     blockers.push('Start date or working period conflicts with availability');
-    score -= 6;
+  } else if (job.availabilityCompatible === true) {
+    positives.push('Availability appears compatible');
+    score += 2;
+  } else {
+    cautions.push('Availability compatibility was not verified');
+    score += 0.75;
   }
   if (job.workRightsCompatible === false) {
     blockers.push('Stated work-right requirements are incompatible');
-    score -= 8;
+  } else if (job.workRightsCompatible === true) {
+    positives.push('Work rights appear compatible');
+    score += 2;
+  } else {
+    cautions.push('Work-right compatibility was not verified');
+    score += 0.75;
   }
-  if (job.availabilityCompatible === true) positives.push('Availability appears compatible');
-  if (job.workRightsCompatible === true) positives.push('Work rights appear compatible');
-  return { score: round1(clamp(score)), blockers, positives };
+  if (job.eligibilityCompatible === false) {
+    blockers.push('The candidate does not meet a stated eligibility requirement');
+  } else if (job.eligibilityCompatible === true) {
+    positives.push('Stated study/qualification eligibility appears compatible');
+    score += 2;
+  } else {
+    cautions.push(asArray(job.eligibilityRequirements).length
+      ? 'Study/qualification eligibility was not fully verified'
+      : 'No explicit eligibility requirements were recorded');
+    score += 0.75;
+  }
+  for (const risk of asArray(job.selectionRisks)) cautions.push(risk);
+  score -= Math.min(2, asArray(job.selectionRisks).length * 0.5);
+  return { score: round1(clamp(score)), blockers, positives, cautions };
 }
 
 function classifyEvidence(job, preferences, now) {
@@ -385,7 +511,9 @@ export function buildReport(session, options = {}) {
   const { unique, duplicates } = deduplicate(session.jobs);
   const evaluated = unique.map((job) => {
     const verification = classifyEvidence(job, session.preferences, now);
-    const roleFit = scoreRole(job, session.candidate, now);
+    const roleFit = session.preferences.mode === 'criteria'
+      ? scoreCriteriaRole(job, session.candidate, session.preferences)
+      : scoreRole(job, session.candidate, now);
     const practicalFit = scorePractical(job, session.candidate, session.preferences);
     return {
       ...job,
@@ -396,16 +524,23 @@ export function buildReport(session, options = {}) {
       practicalFit,
     };
   });
-  const recommended = evaluated
-    .filter((job) => job.verification.status === 'verified-active' && job.practicalFit.blockers.length === 0)
+  const eligible = evaluated
+    .filter((job) => job.verification.status === 'verified-active' && job.practicalFit.blockers.length === 0 && job.practicalFit.score >= 5);
+  const recommended = eligible
+    .filter((job) => job.roleFit.score >= 5)
     .sort((a, b) => (b.roleFit.score + b.practicalFit.score) - (a.roleFit.score + a.practicalFit.score));
-  const rejected = evaluated.filter((job) => !recommended.includes(job));
+  const stretch = eligible
+    .filter((job) => job.roleFit.score >= 3 && job.roleFit.score < 5)
+    .sort((a, b) => (b.roleFit.score + b.practicalFit.score) - (a.roleFit.score + a.practicalFit.score));
+  const rejected = evaluated.filter((job) => !recommended.includes(job) && !stretch.includes(job));
   for (const job of duplicates) {
     rejected.push({
       ...job,
       sourceUrl: normaliseUrl(job.sourceUrl),
       verification: { status: 'rejected', reasons: [`Duplicate of retained listing: ${job.duplicateOf}`] },
-      roleFit: scoreRole(job, session.candidate, now),
+      roleFit: session.preferences.mode === 'criteria'
+        ? scoreCriteriaRole(job, session.candidate, session.preferences)
+        : scoreRole(job, session.candidate, now),
       practicalFit: scorePractical(job, session.candidate, session.preferences),
     });
   }
@@ -418,6 +553,7 @@ export function buildReport(session, options = {}) {
     searchedCount: options.searchedCount ?? session.jobs.length,
     excludedPreviouslyReported: options.excludedPreviouslyReported ?? 0,
     recommended,
+    stretch,
     rejected,
   };
 }
@@ -456,7 +592,11 @@ export function renderMarkdown(report) {
     `- Employment types: ${asArray(report.preferences.employmentTypes).join(', ') || 'not specified'}`,
     `- Locations: ${asArray(report.preferences.locations).join(', ') || 'not specified'}`,
     `- Work arrangements: ${asArray(report.preferences.workArrangements).join(', ') || 'not specified'}`,
-    `- Listings reviewed: ${report.searchedCount}`,
+    `- Leads discovered: ${coverage.leadsDiscovered}`,
+    `- Detail pages opened: ${coverage.detailPagesOpened}`,
+    `- Listings assessed with evidence: ${report.searchedCount}`,
+    `- Search families: ${asArray(coverage.searchFamilies).join(', ')}`,
+    `- Queries run: ${coverage.queriesRun}`,
     `- Previously reported listings excluded: ${report.excludedPreviouslyReported ?? 0}`,
     `- Search coverage: ${coverage.status}`,
     '',
@@ -468,10 +608,13 @@ export function renderMarkdown(report) {
     '',
     bulletList(report.assumptions),
     '',
-    '## Verified roles',
+    '## Verified recommendations',
     '',
   ];
-  if (!report.recommended.length) {
+  if (coverage.status !== 'complete') {
+    lines.push('> Search coverage was incomplete. Results describe only the sources accessible in this run; additional suitable vacancies may exist.', '');
+  }
+  if (!report.recommended.length && !report.stretch.length) {
     if (coverage.status === 'blocked') {
       lines.push('Search incomplete — the configured primary sources could not be searched, so no conclusion can be made about whether qualified vacancies exist.', '');
     } else if (coverage.status === 'partial') {
@@ -479,8 +622,7 @@ export function renderMarkdown(report) {
     } else {
       lines.push('Today there are no new qualified vacancies.', '');
     }
-  } else {
-    if (coverage.status !== 'complete') lines.push('> Search coverage was incomplete. The roles below are verified, but additional suitable vacancies may exist.', '');
+  } else if (report.recommended.length) {
     lines.push(`| Role | Company | Location / arrangement | ${fitLabel} | Practical fit | Direct link |`, '|---|---|---|---:|---:|---|');
     for (const job of report.recommended) {
       lines.push(`| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location ?? '-'} / ${job.workArrangement ?? '-'}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`);
@@ -504,7 +646,56 @@ export function renderMarkdown(report) {
         '**Gaps / cautions**',
         '',
         bulletList(job.roleFit.gaps),
+        '',
+        '**Practical-fit evidence**',
+        '',
+        bulletList(job.practicalFit.positives),
+        '',
+        '**Practical cautions**',
+        '',
+        bulletList(job.practicalFit.cautions),
         ''
+      );
+    });
+  } else {
+    lines.push('No primary recommendation met the 5/10 role-fit threshold. See verified stretch roles below.', '');
+  }
+  if (report.stretch.length) {
+    lines.push(
+      '## Verified stretch roles',
+      '',
+      '> These vacancies are practically possible but have weaker alignment with the candidate\'s sustained day-to-day experience. Treat them as optional applications, not primary recommendations.',
+      '',
+      `| Role | Company | Location / arrangement | ${fitLabel} | Practical fit | Direct link |`,
+      '|---|---|---|---:|---:|---|',
+    );
+    for (const job of report.stretch) {
+      lines.push(`| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location ?? '-'} / ${job.workArrangement ?? '-'}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`);
+    }
+    lines.push('');
+    report.stretch.forEach((job, index) => {
+      lines.push(
+        `### Stretch ${index + 1}. ${job.title} — ${job.employer}`,
+        '',
+        `- Employment: ${job.employmentType ?? 'not stated'}; ${job.engagementModel ?? 'engagement model not stated'}`,
+        `- Posted: ${job.postedAt ?? 'not stated'}${job.closesAt ? `; closes: ${job.closesAt}` : ''}`,
+        `- Verified: ${job.verificationEvidence.verifiedAt}`,
+        `- ${fitLabel}: ${job.roleFit.score}/10`,
+        `- Practical fit: ${job.practicalFit.score}/10`,
+        `- Link: ${job.applicationUrl || job.sourceUrl}`,
+        '',
+        fitEvidenceHeading,
+        '',
+        bulletList(job.roleFit.evidence),
+        '',
+        '**Gaps / cautions**',
+        '',
+        bulletList(job.roleFit.gaps),
+        '',
+        '**Practical cautions**',
+        '',
+        bulletList(job.practicalFit.cautions),
+        '',
       );
     });
   }
@@ -513,16 +704,22 @@ export function renderMarkdown(report) {
     lines.push('- None', '');
   } else {
     for (const job of report.rejected) {
-      const reasons = [...job.verification.reasons, ...job.practicalFit.blockers];
+      const roleReason = job.verification.status === 'verified-active' && job.roleFit.score < 3
+        ? [`Role fit ${job.roleFit.score}/10 is below the minimum stretch threshold`]
+        : [];
+      const reasons = [...job.verification.reasons, ...job.practicalFit.blockers, ...roleReason];
       lines.push(`- **${job.title} — ${job.employer}** (${job.verification.status}): ${reasons.join('; ') || 'Not recommended after ranking'}. [Source](${job.sourceUrl})`);
     }
     lines.push('');
   }
   lines.push(criteriaOnly ? '## Criteria evidence for the strongest roles' : '## CV emphasis for the strongest roles', '');
-  const evidence = [...new Set(report.recommended.flatMap((job) => job.roleFit.evidence))].slice(0, 8);
-  const emptyEvidence = criteriaOnly
-    ? 'No verified roles were available, so no criteria evidence is available.'
-    : 'No verified roles were available, so no role-specific CV emphasis is suggested.';
+  const rankedRoles = [...report.recommended, ...report.stretch];
+  const evidence = [...new Set(rankedRoles.flatMap((job) => job.roleFit.evidence))].slice(0, 8);
+  const emptyEvidence = rankedRoles.length
+    ? 'Verified roles were found, but the evidence session captured no defensible role-specific emphasis.'
+    : criteriaOnly
+      ? 'No verified roles were available, so no criteria evidence is available.'
+      : 'No verified roles were available, so no role-specific CV emphasis is suggested.';
   lines.push(bulletList(evidence, emptyEvidence), '');
   return `${lines.join('\n')}\n`;
 }
@@ -628,7 +825,7 @@ export async function runCli(argv = process.argv.slice(2)) {
         console.log(`No new listings; existing report left unchanged: ${resolve(args.output)} (${report.excludedPreviouslyReported} previously reported)`);
       } else {
         const action = report.writeAction === 'appended' ? 'updated incrementally' : 'created';
-        console.log(`Report ${action}: ${resolve(args.output)} (${report.recommended.length} new verified recommendation(s), ${report.rejected.length} new rejected/unverified, ${report.excludedPreviouslyReported} previously reported)`);
+        console.log(`Report ${action}: ${resolve(args.output)} (${report.recommended.length} new verified recommendation(s), ${report.stretch.length} new stretch role(s), ${report.rejected.length} new rejected/unverified, ${report.excludedPreviouslyReported} previously reported)`);
       }
       return 0;
     }

@@ -9,8 +9,15 @@ const job: VerifiedJobPosting = {
   employer: 'Example Ltd',
   location: 'Auckland',
   employmentType: 'internship',
+  roleFamilies: ['software test engineering'],
+  responsibilityAreas: ['test automation', 'backend development'],
+  domains: ['test automation'],
   requiredSkills: ['Java', 'Spring Boot'],
   preferredSkills: ['SQL'],
+  eligibilityRequirements: [],
+  eligibilityCompatible: true,
+  availabilityCompatible: true,
+  workRightsCompatible: true,
   verificationStatus: 'verified-active',
   verificationEvidence: {
     detailPageOpened: true,
@@ -33,6 +40,11 @@ function profile(javaLevel: 'core' | 'exposure'): CandidateProfile {
       { name: 'Spring Boot', level: 'frequent' },
       { name: 'SQL', level: 'frequent' },
     ],
+    capabilities: [
+      { name: 'test automation', level: 'core' },
+      { name: 'backend development', level: 'frequent' },
+    ],
+    qualifications: [],
   };
 }
 

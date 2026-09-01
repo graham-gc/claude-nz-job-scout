@@ -12,7 +12,12 @@
       { "name": "Java", "level": "core", "years": 8, "lastUsedYear": 2026, "evidence": ["Backend and test platform development"] },
       { "name": "Spring Boot", "level": "frequent", "years": 4, "lastUsedYear": 2026, "evidence": ["Built an API automation platform"] },
       { "name": "SQL", "level": "frequent", "years": 8, "lastUsedYear": 2026, "evidence": ["Relational data and test analysis"] }
-    ]
+    ],
+    "capabilities": [
+      { "name": "API test automation", "level": "core", "years": 4, "lastUsedYear": 2026, "evidence": ["Owned an automation platform"] },
+      { "name": "backend development", "level": "frequent", "years": 4, "lastUsedYear": 2026, "evidence": ["Built Spring Boot services"] }
+    ],
+    "qualifications": ["Bachelor degree", "Postgraduate IT study in progress"]
   },
   "preferences": {
     "mode": "profile",
@@ -26,6 +31,10 @@
   },
   "searchCoverage": {
     "status": "complete",
+    "searchFamilies": ["software test engineering", "Java backend"],
+    "queriesRun": 4,
+    "leadsDiscovered": 1,
+    "detailPagesOpened": 1,
     "sources": [{ "name": "Employer careers site", "status": "searched", "note": "Example public-page verification" }]
   },
   "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],
@@ -48,8 +57,14 @@
       "postedAt": "2026-08-25",
       "closesAt": "2026-09-30",
       "summary": "API test automation for a Java service platform",
+      "roleFamilies": ["software test engineering", "backend engineering"],
+      "responsibilityAreas": ["API test automation", "test framework development", "backend debugging"],
+      "domains": ["software quality", "developer productivity"],
       "requiredSkills": ["Java", "API automation"],
       "preferredSkills": ["Spring Boot", "SQL"],
+      "eligibilityRequirements": ["Currently studying a New Zealand tertiary qualification"],
+      "eligibilityCompatible": true,
+      "selectionRisks": [],
       "verificationEvidence": {
         "detailPageOpened": true,
         "applyRouteAvailable": true,

@@ -1,30 +1,76 @@
 # New Zealand Job Scout Report
 
-Generated: 2026-08-31T18:00:00+12:00
+Generated: 1 Sept 2026, 7:58:03 pm NZST (Pacific/Auckland)
 
 ## Search criteria
 
 - Mode: profile
-- Maximum posting age: 30 days
+- Posting age: 30 days
 - Employment types: internship, part-time
 - Locations: Auckland
 - Work arrangements: on-site, hybrid, remote
+- Leads discovered: 1
+- Detail pages opened: 1
+- Listings assessed with evidence: 1
+- Search families: software test engineering, Java backend
+- Queries run: 4
+- Previously reported listings excluded: 0
+- Search coverage: complete
 
-## Assumptions
+### Source coverage
 
-- Full-time availability applies only during scheduled study breaks.
-- Technologies mentioned only briefly in the CV are exposure-level, not core skills.
+- Employer careers site — searched: Example public-page verification
 
-## Verified opportunities
+### Assumptions
 
-Role | Employer | Location | Role fit | Practical fit | Link
---- | --- | --- | ---: | ---: | ---
-Example Software Test Intern | Example Employer | Auckland | 8.4 | 9.5 | [Open](https://example.invalid/jobs/123)
+- This file is illustrative; its employer and vacancy are fictional.
 
-## Detailed assessment
+## Verified recommendations
 
-This repository uses fictional entries in examples. A real report must include direct, opened, active links and a verification timestamp.
+| Role | Company | Location / arrangement | Role fit | Practical fit | Direct link |
+|---|---|---|---:|---:|---|
+| Software Test Engineer Intern | Example Engineering | Auckland / hybrid | 7.3/10 | 10/10 | [Open listing](https://careers.example.com/jobs/NZ-101/apply) |
+
+### 1. Software Test Engineer Intern — Example Engineering
+
+- Employment: internship; employee
+- Posted: 2026-08-25; closes: 2026-09-30
+- Verified: 2026-09-01T09:00:00+12:00
+- Role fit: 7.3/10
+- Practical fit: 10/10
+- Link: https://careers.example.com/jobs/NZ-101/apply
+
+**Evidence of fit**
+
+- Java: supported by Java (core, 8 years)
+- API automation: supported by API test automation (core, 4 years)
+- API test automation: supported by API test automation (core, 4 years)
+- backend debugging: supported by backend development (frequent, 4 years)
+
+**Gaps / cautions**
+
+- None recorded
+
+**Practical-fit evidence**
+
+- Employment type: internship
+- Location: Auckland
+- Work arrangement: hybrid
+- Availability appears compatible
+- Work rights appear compatible
+- Stated study/qualification eligibility appears compatible
+
+**Practical cautions**
+
+- None recorded
 
 ## Rejected or unverified
 
-- Example expired listing: detail page displayed “This job is no longer available”.
+- None
+
+## CV emphasis for the strongest roles
+
+- Java: supported by Java (core, 8 years)
+- API automation: supported by API test automation (core, 4 years)
+- API test automation: supported by API test automation (core, 4 years)
+- backend debugging: supported by backend development (frequent, 4 years)

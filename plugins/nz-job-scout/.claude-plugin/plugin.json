@@ -1,7 +1,7 @@
 {
   "name": "nz-job-scout",
   "description": "Public-source New Zealand job discovery and CV-based matching for Claude Code.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": {
     "name": "Yusi (Graham) Cheng"
   },

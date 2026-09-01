@@ -18,6 +18,13 @@ const candidate = {
     { name: 'Spring Boot', level: 'frequent', years: 4, lastUsedYear: 2026 },
     { name: 'Playwright', level: 'exposure', years: 0.2, lastUsedYear: 2026 },
   ],
+  capabilities: [
+    { name: 'API test automation', level: 'core', years: 4, lastUsedYear: 2026 },
+    { name: 'test framework development', level: 'core', years: 4, lastUsedYear: 2026 },
+    { name: 'backend development', level: 'frequent', years: 4, lastUsedYear: 2026 },
+    { name: 'software product development', level: 'frequent', years: 4, lastUsedYear: 2026 },
+  ],
+  qualifications: ['Bachelor of Engineering', 'Master of Information Technology in progress'],
 };
 
 function activeJob(overrides = {}) {
@@ -39,8 +46,14 @@ function activeJob(overrides = {}) {
     postedAt: '2026-08-25',
     closesAt: '2026-09-30',
     summary: 'API test automation for a Java platform',
+    roleFamilies: ['software test engineering', 'backend engineering'],
+    responsibilityAreas: ['API test automation', 'test framework development', 'backend debugging'],
+    domains: ['test automation', 'developer productivity'],
     requiredSkills: ['Java', 'API automation'],
     preferredSkills: ['Spring Boot', 'Playwright'],
+    eligibilityRequirements: ['Currently studying a New Zealand tertiary qualification'],
+    eligibilityCompatible: true,
+    selectionRisks: [],
     verificationEvidence: {
       detailPageOpened: true,
       applyRouteAvailable: true,
@@ -66,6 +79,10 @@ function session(jobs = [activeJob()]) {
     },
     searchCoverage: {
       status: 'complete',
+      searchFamilies: ['software test engineering', 'Java backend'],
+      queriesRun: 4,
+      leadsDiscovered: jobs.length,
+      detailPagesOpened: jobs.length,
       sources: [{ name: 'Employer careers site', status: 'searched', note: 'Public vacancy and application pages opened' }],
     },
     assumptions: ['Full-time hours are acceptable only during a scheduled study break.'],
@@ -99,10 +116,51 @@ test('keeps verified roles and rejects stale, aggregator, and duplicate listings
   assert.equal(result.recommended[0].practicalFit.blockers.length, 0);
 });
 
+test('rejects eligibility criteria incorrectly placed in requiredSkills', () => {
+  const invalid = session([activeJob({
+    requiredSkills: ['Java', 'NZQA level 6-10 qualification'],
+    eligibilityRequirements: [],
+  })]);
+  const result = validateSession(invalid);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join('\n'), /move it to eligibilityRequirements/);
+});
+
+test('uses transferable capabilities for broad internships and keeps them as stretch roles', () => {
+  const broad = activeJob({
+    title: 'Engineering Intern - Summer 2026/27',
+    summary: 'Software, computer vision, AI and imaging product projects',
+    roleFamilies: ['software engineering', 'computer vision engineering'],
+    responsibilityAreas: ['software product development', 'AI model development', 'computer vision'],
+    domains: ['edge AI', 'smart cameras'],
+    requiredSkills: [],
+    preferredSkills: [],
+    selectionRisks: ['Most advertised projects focus on AI, computer vision, or camera hardware'],
+  });
+  const report = buildReport(session([broad]), { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(report.recommended.length, 0);
+  assert.equal(report.stretch.length, 1);
+  assert.ok(report.stretch[0].roleFit.score >= 3);
+  assert.ok(report.stretch[0].practicalFit.score < 10);
+  assert.doesNotMatch(report.stretch[0].roleFit.gaps.join('\n'), /NZQA|qualification/i);
+});
+
+test('does not treat Java as evidence of JavaScript experience', () => {
+  const javascriptRole = activeJob({
+    requiredSkills: ['JavaScript'],
+    responsibilityAreas: ['frontend development'],
+    roleFamilies: ['frontend engineering'],
+    domains: ['web frontend'],
+  });
+  const report = buildReport(session([javascriptRole]), { now: '2026-09-01T10:00:00+12:00' });
+  const assessed = [...report.recommended, ...report.stretch, ...report.rejected][0];
+  assert.doesNotMatch(assessed.roleFit.evidence.join('\n'), /JavaScript: supported by Java/);
+});
+
 test('renders a Markdown report with direct evidence and rejection reasons', () => {
   const result = buildReport(session(), { now: '2026-09-01T10:00:00+12:00' });
   const markdown = renderMarkdown(result);
-  assert.match(markdown, /## Verified roles/);
+  assert.match(markdown, /## Verified recommendations/);
   assert.match(markdown, /Example Engineering/);
   assert.match(markdown, /Role fit/);
   assert.match(markdown, /Pacific\/Auckland/);
@@ -113,6 +171,7 @@ test('labels criteria-only results without implying CV analysis', () => {
   criteriaOnly.preferences.mode = 'criteria';
   criteriaOnly.candidate.name = 'Not supplied';
   criteriaOnly.candidate.skills = [];
+  criteriaOnly.candidate.capabilities = [];
   const markdown = renderMarkdown(buildReport(criteriaOnly, { now: '2026-09-01T10:00:00+12:00' }));
   assert.match(markdown, /Criteria fit/);
   assert.doesNotMatch(markdown, /CV emphasis/);
@@ -122,6 +181,10 @@ test('does not report no vacancies when search access was blocked', () => {
   const blocked = session([]);
   blocked.searchCoverage = {
     status: 'blocked',
+    searchFamilies: ['software test engineering', 'Java backend'],
+    queriesRun: 2,
+    leadsDiscovered: 0,
+    detailPagesOpened: 0,
     sources: [
       { name: 'Employer careers site', status: 'blocked', note: '403 from anonymous request; source skipped' },
       { name: 'Public ATS pages', status: 'unavailable', note: 'No public page could be opened' },
