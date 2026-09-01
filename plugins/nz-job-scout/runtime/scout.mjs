@@ -60,6 +60,30 @@ export function validateSession(session) {
   if (!session.candidate || typeof session.candidate !== 'object') errors.push('candidate is required');
   if (!session.preferences || typeof session.preferences !== 'object') errors.push('preferences is required');
   if (!Array.isArray(session.jobs)) errors.push('jobs must be an array');
+  if (session.preferences) {
+    const searchModes = new Set(['profile', 'criteria', 'combined']);
+    if (!searchModes.has(session.preferences.mode)) {
+      errors.push('preferences.mode must be profile, criteria, or combined');
+    }
+  }
+  if (!session.searchCoverage || typeof session.searchCoverage !== 'object') {
+    errors.push('searchCoverage is required');
+  } else {
+    const coverageStatuses = new Set(['complete', 'partial', 'blocked']);
+    const sourceStatuses = new Set(['searched', 'blocked', 'unavailable', 'skipped']);
+    if (!coverageStatuses.has(session.searchCoverage.status)) {
+      errors.push('searchCoverage.status must be complete, partial, or blocked');
+    }
+    if (!Array.isArray(session.searchCoverage.sources) || session.searchCoverage.sources.length === 0) {
+      errors.push('searchCoverage.sources must contain at least one source attempt');
+    }
+    asArray(session.searchCoverage.sources).forEach((source, index) => {
+      requiredString(source?.name, `searchCoverage.sources[${index}].name`, errors);
+      if (!sourceStatuses.has(source?.status)) errors.push(`searchCoverage.sources[${index}].status is invalid`);
+    });
+    const searchedSources = asArray(session.searchCoverage.sources).filter((source) => source.status === 'searched');
+    if (session.searchCoverage.status !== 'blocked' && searchedSources.length === 0) errors.push('complete or partial coverage requires at least one searched source');
+  }
   if (session.candidate) {
     if (!Array.isArray(session.candidate.skills)) errors.push('candidate.skills must be an array');
     asArray(session.candidate.skills).forEach((skill, index) => {
@@ -294,6 +318,7 @@ export function buildReport(session, options = {}) {
     generatedAt: now.toISOString(),
     candidate: session.candidate,
     preferences: session.preferences,
+    searchCoverage: session.searchCoverage,
     assumptions: asArray(session.assumptions),
     searchedCount: session.jobs.length,
     recommended,
@@ -309,11 +334,24 @@ function bulletList(values, fallback = 'None recorded') {
   return values.length ? values.map((value) => `- ${value}`).join('\n') : `- ${fallback}`;
 }
 
+function formatAucklandTime(value) {
+  const formatted = new Intl.DateTimeFormat('en-NZ', {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: 'Pacific/Auckland',
+  }).format(new Date(value));
+  return `${formatted} (Pacific/Auckland)`;
+}
+
 export function renderMarkdown(report) {
+  const coverage = report.searchCoverage;
+  const criteriaOnly = report.preferences.mode === 'criteria';
+  const fitLabel = criteriaOnly ? 'Criteria fit' : 'Role fit';
+  const fitEvidenceHeading = criteriaOnly ? '**Evidence of criteria match**' : '**Evidence of fit**';
   const lines = [
     '# New Zealand Job Scout Report',
     '',
-    `Generated: ${report.generatedAt}`,
+    `Generated: ${formatAucklandTime(report.generatedAt)}`,
     '',
     '## Search criteria',
     '',
@@ -323,6 +361,11 @@ export function renderMarkdown(report) {
     `- Locations: ${asArray(report.preferences.locations).join(', ') || 'not specified'}`,
     `- Work arrangements: ${asArray(report.preferences.workArrangements).join(', ') || 'not specified'}`,
     `- Listings reviewed: ${report.searchedCount}`,
+    `- Search coverage: ${coverage.status}`,
+    '',
+    '### Source coverage',
+    '',
+    ...coverage.sources.map((source) => `- ${source.name} — ${source.status}${source.note ? `: ${source.note}` : ''}`),
     '',
     '### Assumptions',
     '',
@@ -332,9 +375,16 @@ export function renderMarkdown(report) {
     '',
   ];
   if (!report.recommended.length) {
-    lines.push('Today there are no new qualified vacancies.', '');
+    if (coverage.status === 'blocked') {
+      lines.push('Search incomplete — the configured primary sources could not be searched, so no conclusion can be made about whether qualified vacancies exist.', '');
+    } else if (coverage.status === 'partial') {
+      lines.push('No qualified roles were found among the sources that could be verified. Search coverage was incomplete, so this is not evidence that no suitable vacancies exist.', '');
+    } else {
+      lines.push('Today there are no new qualified vacancies.', '');
+    }
   } else {
-    lines.push('| Role | Company | Location / arrangement | Role fit | Practical fit | Direct link |', '|---|---|---|---:|---:|---|');
+    if (coverage.status !== 'complete') lines.push('> Search coverage was incomplete. The roles below are verified, but additional suitable vacancies may exist.', '');
+    lines.push(`| Role | Company | Location / arrangement | ${fitLabel} | Practical fit | Direct link |`, '|---|---|---|---:|---:|---|');
     for (const job of report.recommended) {
       lines.push(`| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location ?? '-'} / ${job.workArrangement ?? '-'}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`);
     }
@@ -346,11 +396,11 @@ export function renderMarkdown(report) {
         `- Employment: ${job.employmentType ?? 'not stated'}; ${job.engagementModel ?? 'engagement model not stated'}`,
         `- Posted: ${job.postedAt ?? 'not stated'}${job.closesAt ? `; closes: ${job.closesAt}` : ''}`,
         `- Verified: ${job.verificationEvidence.verifiedAt}`,
-        `- Role fit: ${job.roleFit.score}/10`,
+        `- ${fitLabel}: ${job.roleFit.score}/10`,
         `- Practical fit: ${job.practicalFit.score}/10`,
         `- Link: ${job.applicationUrl || job.sourceUrl}`,
         '',
-        '**Evidence of fit**',
+        fitEvidenceHeading,
         '',
         bulletList(job.roleFit.evidence),
         '',
@@ -371,9 +421,12 @@ export function renderMarkdown(report) {
     }
     lines.push('');
   }
-  lines.push('## CV emphasis for the strongest roles', '');
+  lines.push(criteriaOnly ? '## Criteria evidence for the strongest roles' : '## CV emphasis for the strongest roles', '');
   const evidence = [...new Set(report.recommended.flatMap((job) => job.roleFit.evidence))].slice(0, 8);
-  lines.push(bulletList(evidence, 'No verified roles were available, so no role-specific CV emphasis is suggested.'), '');
+  const emptyEvidence = criteriaOnly
+    ? 'No verified roles were available, so no criteria evidence is available.'
+    : 'No verified roles were available, so no role-specific CV emphasis is suggested.';
+  lines.push(bulletList(evidence, emptyEvidence), '');
   return `${lines.join('\n')}\n`;
 }
 

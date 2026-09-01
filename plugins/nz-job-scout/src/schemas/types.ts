@@ -31,7 +31,7 @@ export interface CandidateProfile {
 }
 
 export interface SearchPreferences {
-  mode: 'profile' | 'keywords';
+  mode: 'profile' | 'criteria' | 'combined';
   keywords?: string[];
   maxPostingAgeDays: number;
   employmentTypes: EmploymentType[];

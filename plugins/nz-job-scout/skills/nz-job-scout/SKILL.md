@@ -9,13 +9,25 @@ Find real, currently available New Zealand vacancies and assess them against the
 
 ## Required inputs
 
-Obtain or infer only what is necessary:
+Accept either or both of these inputs:
 
-- CV path (`.pdf` or `.md`) or a candidate profile already supplied in the conversation;
-- search mode: profile-driven or explicit keywords;
-- desired employment types, locations, and work arrangements;
-- availability and New Zealand work-right restrictions;
-- posting-age window, defaulting to 30 days.
+- a CV path (`.pdf` or `.md`) or candidate profile already supplied in the conversation;
+- explicit search criteria, including any combination of role titles, keywords, employment types, locations, work arrangements, availability, work-right constraints, and posting-age window.
+
+Do not require the user to name a search mode. Infer it from the supplied inputs:
+
+- `profile`: a CV or candidate profile is supplied without explicit job criteria;
+- `criteria`: explicit job criteria are supplied without a CV or candidate profile;
+- `combined`: both are supplied.
+
+At least one of a candidate profile or explicit search criteria is required. If neither is available, ask one concise question requesting either a resume path or the desired job criteria.
+
+Defaults:
+
+- maximum posting age: 30 days;
+- vacancy state: currently open with a directly verified application route;
+- geography: New Zealand, unless the user or candidate context supplies a narrower constraint;
+- employment type and work arrangement: do not invent restrictive filters when they cannot be inferred reliably.
 
 Do not repeatedly ask for information already present in the CV or conversation. If a missing preference would materially change results, ask one concise question; otherwise use a conservative assumption and disclose it.
 
@@ -23,20 +35,36 @@ Before searching, read `${CLAUDE_PLUGIN_ROOT}/skills/nz-job-scout/references/ses
 
 ## Workflow
 
+### 0. Automatic browser and session preflight
+
+Session handling is internal behaviour. Do not ask the user whether to use their login state and do not require session-related wording in the request.
+
+1. Check whether interactive `claude-in-chrome` browser tools are available.
+2. If available, use the visible browser for SEEK, LinkedIn, Trade Me Jobs, and other JavaScript-heavy sites.
+3. If a requested site is already authenticated, use that existing browser session automatically.
+4. If the browser is unavailable, the site is logged out, or access is blocked by a login wall or CAPTCHA, do not request credentials and do not stop the whole search. Skip session-only behaviour and continue with publicly accessible employer career sites and ATS pages.
+
+Record inaccessible sources as `blocked` or `unavailable` and classify overall coverage as `partial` when at least one primary public source was searched. Use `blocked` only when no primary source could be searched. Never silently label the run `complete` after skipping SEEK or LinkedIn.
+
+The browser integration supplies access to visible pages under the user's existing login state. Never inspect, request, export, or persist cookies, passwords, tokens, local storage, or other authentication material.
+
+A Skill cannot install the browser extension or declare the user's browser login as a package dependency. Chrome support is an optional capability that improves coverage, not a user-selected search mode or a hard installation prerequisite.
+
 ### 1. Read and model the candidate
 
-Read the complete CV. For PDF input, use Claude's document-reading capability; for Markdown, read the source text directly.
+In `profile` or `combined` mode, read the complete CV. For PDF input, use Claude's document-reading capability; for Markdown, read the source text directly.
 
 Build the `candidate` object described in the session-format reference. Classify each skill as `core`, `frequent`, `working`, or `exposure`. Base this on duration, repeated use, recency, project ownership, production responsibility, and outcomes. A technology is not a strong skill merely because it appears once.
 
-### 2. Search in the browser
+In `criteria` mode, do not claim to have assessed personal fit. Build the minimal candidate object required by the evidence contract from only the user's stated criteria, leaving unsupported skills and personal constraints empty.
 
-Before issuing searches, determine whether an interactive browser session is available.
+Resolve search scope before browsing. In `profile` mode, derive role families and useful query variants from sustained, recent work rather than every CV keyword. In `criteria` mode, preserve the user's constraints. In `combined` mode, explicit criteria constrain or override inferred preferences, while the CV determines experience-based ranking inside that scope.
+
+### 2. Search in the browser
 
 - For SEEK and LinkedIn, use the interactive browser and the pages visible to the user.
 - Never use `WebFetch`, `Fetch`, `curl`, or another direct HTTP client on SEEK or LinkedIn job pages. These sites commonly return 403 or login walls to non-browser requests, and a successful raw response would not prove that the user's application route works.
-- If personalised results are requested, let the user connect Claude in Chrome and sign in themselves. Work through that browser session; never request, read, copy, save, or export cookies, passwords, session tokens, or browser storage.
-- If no interactive browser is available, tell the user once that SEEK and LinkedIn cannot be reliably verified and ask them to connect a browser. Do not continue issuing equivalent search queries that return zero searches.
+- Work through the existing browser session and visible page state; do not access authentication material directly.
 
 Search direct sources first:
 
@@ -57,6 +85,8 @@ Use this failure routing:
 
 Never claim that a listing was verified unless its exact detail page and application route were observed.
 
+Before building the session, classify search coverage as `complete`, `partial`, or `blocked` according to the session-format reference. Access errors belong in `searchCoverage.sources`, not only in assumptions. Never equate zero collected listings with a complete search.
+
 ### 3. Build an evidence session
 
 For every candidate vacancy, open the exact detail page and capture all required fields in the session JSON, including:
@@ -70,7 +100,9 @@ For every candidate vacancy, open the exact detail page and capture all required
 - verification time in `Pacific/Auckland` time;
 - availability and work-right compatibility only when supported by evidence.
 
-Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or raw browser state. Never bypass CAPTCHAs, rate limits, access controls, or site restrictions; let the user complete login and challenge screens.
+Also record every intended source and its search status. If SEEK returned 403 and no interactive browser was available, coverage is `blocked` unless another primary source was successfully searched. A blocked or partial run may still produce a diagnostic report, but it must not conclude that no suitable vacancies exist.
+
+Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or raw browser state. Never bypass CAPTCHAs, rate limits, access controls, or site restrictions; skip the affected source and record the reduced coverage.
 
 ### 4. Validate and generate the report
 
@@ -101,11 +133,25 @@ Tell the user:
 - the strongest verified matches and their main blockers or gaps;
 - whether browser/login limitations affected coverage.
 
-If no role survives verification and practical constraints, say clearly: “Today there are no new qualified vacancies.”
+Say “Today there are no new qualified vacancies” only when `searchCoverage.status` is `complete`. For `partial`, say that no roles were found among accessible sources and that coverage was incomplete. For `blocked`, say that the search could not be completed and no conclusion can be made about vacancy availability.
+
+When coverage is blocked because no primary source was accessible, finish with a diagnostic report. Do not ask the user to choose a session mode, provide credentials, or repeat the request with special session wording.
 
 ## Search modes
 
-In profile mode, derive search families from the candidate's sustained work. In keyword mode, preserve the user's keywords exactly as search criteria; use the CV only for ranking unless the user opts out.
+Select the mode automatically; the user never needs to pass a mode flag.
+
+### Profile
+
+Use when a resume or candidate profile is supplied without explicit job criteria. Derive several focused search families from the candidate's sustained, recent, and demonstrably strong work. Default to active New Zealand vacancies posted in the last 30 days. Do not narrow location, employment type, or work arrangement without supporting candidate context.
+
+### Criteria
+
+Use when search conditions are supplied without a resume. Treat those conditions as the source of truth. Synonymous query variants may be used for discovery, but do not silently broaden material constraints. Rank by criteria relevance and practical compatibility; do not present a personalised CV-match score.
+
+### Combined
+
+Use when both a resume and search conditions are supplied. Explicit conditions define the eligible vacancy set. Use the resume to rank those vacancies by real experience depth, recency, ownership, and outcomes. Never discard an explicit condition merely because a broader role would fit the CV.
 
 ## Action boundary
 
