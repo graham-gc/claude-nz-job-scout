@@ -28,6 +28,8 @@ export interface CandidateProfile {
   workRights?: string;
   domains: string[];
   skills: CandidateSkill[];
+  capabilities: CandidateSkill[];
+  qualifications: string[];
 }
 
 export interface SearchPreferences {
@@ -38,6 +40,7 @@ export interface SearchPreferences {
   locations: string[];
   workArrangements: WorkArrangement[];
   includeUnverified: boolean;
+  maxHoursPerWeekDuringStudy?: number;
 }
 
 export interface JobPosting {
@@ -50,11 +53,22 @@ export interface JobPosting {
   location: string;
   workArrangement?: WorkArrangement;
   employmentType?: EmploymentType;
+  engagementModel?: string;
+  hoursPerWeek?: number;
+  duringScheduledBreak?: boolean;
   postedAt?: string;
   closesAt?: string;
   summary?: string;
+  roleFamilies: string[];
+  responsibilityAreas: string[];
+  domains: string[];
   requiredSkills: string[];
   preferredSkills: string[];
+  eligibilityRequirements: string[];
+  eligibilityCompatible?: boolean;
+  availabilityCompatible?: boolean;
+  workRightsCompatible?: boolean;
+  selectionRisks?: string[];
 }
 
 export interface VerificationEvidence {
@@ -76,6 +90,7 @@ export interface ScoreBreakdown {
   reasons: string[];
   gaps: string[];
   blockers: string[];
+  cautions: string[];
 }
 
 export interface JobAssessment {
@@ -89,6 +104,7 @@ export interface JobReport {
   criteria: SearchPreferences;
   assumptions: string[];
   recommended: JobAssessment[];
+  stretch: JobAssessment[];
   rejected: Array<{
     job: VerifiedJobPosting;
     reason: string;

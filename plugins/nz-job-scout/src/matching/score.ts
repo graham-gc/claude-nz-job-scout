@@ -18,7 +18,7 @@ function normalise(value: string): string {
 }
 
 function skillIndex(profile: CandidateProfile): Map<string, CandidateSkill> {
-  return new Map(profile.skills.map((skill) => [normalise(skill.name), skill]));
+  return new Map([...profile.skills, ...profile.capabilities].map((item) => [normalise(item.name), item]));
 }
 
 function rounded(value: number): number {
@@ -35,6 +35,10 @@ export function scoreRoleFit(
 
   const required = job.requiredSkills.map((name) => ({ name, skill: index.get(normalise(name)) }));
   const preferred = job.preferredSkills.map((name) => ({ name, skill: index.get(normalise(name)) }));
+  const responsibilities = job.responsibilityAreas.map((name) => ({
+    name,
+    skill: index.get(normalise(name)),
+  }));
 
   const requiredScore = required.length
     ? required.reduce((sum, item) => sum + (item.skill ? SKILL_WEIGHTS[item.skill.level] : 0), 0) /
@@ -44,6 +48,10 @@ export function scoreRoleFit(
     ? preferred.reduce((sum, item) => sum + (item.skill ? SKILL_WEIGHTS[item.skill.level] : 0), 0) /
       preferred.length
     : requiredScore;
+  const responsibilityScore = responsibilities.length
+    ? responsibilities.reduce((sum, item) => sum + (item.skill ? SKILL_WEIGHTS[item.skill.level] : 0), 0) /
+      responsibilities.length
+    : 0.45;
 
   for (const item of required) {
     if (!item.skill) gaps.push(`No evidence for required skill: ${item.name}`);
@@ -51,15 +59,21 @@ export function scoreRoleFit(
     else reasons.push(`${item.name}: ${item.skill.level}`);
   }
 
-  const domainText = `${job.title} ${job.summary ?? ''}`.toLowerCase();
-  const domainMatch = profile.domains.some((domain) => domainText.includes(domain.toLowerCase()));
+  const domainText = [...job.domains, ...job.roleFamilies, job.title, job.summary ?? ''].join(' ').toLowerCase();
+  const domainMatch = [...profile.domains, ...profile.targetRoleFamilies].some((domain) =>
+    domainText.includes(domain.toLowerCase()),
+  );
   if (domainMatch) reasons.push('Relevant domain experience');
+  for (const item of responsibilities) {
+    if (item.skill) reasons.push(`${item.name}: supported by ${item.skill.name} (${item.skill.level})`);
+  }
 
   return {
-    score: rounded((requiredScore * 0.75 + preferredScore * 0.15 + (domainMatch ? 0.1 : 0.05)) * 10),
+    score: rounded(requiredScore * 4 + preferredScore + responsibilityScore * 3.5 + (domainMatch ? 1.5 : 0.5)),
     reasons,
     gaps,
     blockers: [],
+    cautions: required.length ? [] : ['No concrete required technologies were stated'],
   };
 }
 
@@ -71,7 +85,8 @@ export function scorePracticalFit(
   const reasons: string[] = [];
   const gaps: string[] = [];
   const blockers: string[] = [];
-  let score = 10;
+  const cautions: string[] = [];
+  let score = 0;
 
   if (job.verificationStatus !== 'verified-active') {
     blockers.push(`Listing is ${job.verificationStatus}`);
@@ -80,12 +95,12 @@ export function scorePracticalFit(
 
   if (job.employmentType && !preferences.employmentTypes.includes(job.employmentType)) {
     blockers.push(`Employment type is ${job.employmentType}`);
-    score -= 5;
   } else if (job.employmentType) {
     reasons.push(`Employment type matches: ${job.employmentType}`);
+    score += 2;
   } else {
     gaps.push('Employment type not stated');
-    score -= 1;
+    score += 0.75;
   }
 
   const locationMatch = preferences.locations.some((location) =>
@@ -93,12 +108,28 @@ export function scorePracticalFit(
   );
   if (!locationMatch && job.workArrangement !== 'remote') {
     blockers.push(`Location does not match: ${job.location}`);
-    score -= 4;
   } else {
     reasons.push(`Location/work arrangement is acceptable: ${job.location}`);
+    score += 2;
   }
 
-  if (profile.workRights) reasons.push(`Work rights to confirm: ${profile.workRights}`);
+  if (job.availabilityCompatible === true) {
+    reasons.push('Availability appears compatible');
+    score += 2;
+  } else if (job.availabilityCompatible === false) blockers.push('Availability is incompatible');
+  else cautions.push('Availability compatibility was not verified');
 
-  return { score: rounded(score), reasons, gaps, blockers };
+  if (job.workRightsCompatible === true) {
+    reasons.push('Work rights appear compatible');
+    score += 2;
+  } else if (job.workRightsCompatible === false) blockers.push('Work rights are incompatible');
+  else cautions.push('Work-right compatibility was not verified');
+
+  if (job.eligibilityCompatible === true) {
+    reasons.push('Eligibility appears compatible');
+    score += 2;
+  } else if (job.eligibilityCompatible === false) blockers.push('Eligibility is incompatible');
+  else cautions.push('Eligibility compatibility was not verified');
+
+  return { score: rounded(score), reasons, gaps, blockers, cautions };
 }

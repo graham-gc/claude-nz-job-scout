@@ -61,6 +61,13 @@ In `profile` or `combined` mode, read the complete CV. For PDF input, use Claude
 
 Build the `candidate` object described in the session-format reference. Classify each skill as `core`, `frequent`, `working`, or `exposure`. Base this on duration, repeated use, recency, project ownership, production responsibility, and outcomes. A technology is not a strong skill merely because it appears once.
 
+Model two distinct kinds of evidence:
+
+- `skills`: concrete languages, frameworks, databases, protocols, and tools;
+- `capabilities`: work repeatedly performed, such as backend development, API automation, performance testing, debugging, internal-tool delivery, or technical support.
+
+Record qualifications separately. Never treat a degree, NZQA level, current-student status, work-right condition, or other eligibility rule as a missing technical skill. Conversely, do not award AI/ML, cloud, frontend, mobile, or another specialty merely because the CV contains a nearby term. Actual sustained duties and demonstrated ownership outweigh keyword counts.
+
 In `criteria` mode, do not claim to have assessed personal fit. Build the minimal candidate object required by the evidence contract from only the user's stated criteria, leaving unsupported skills and personal constraints empty.
 
 Resolve search scope before browsing. In `profile` mode, derive role families and useful query variants from sustained, recent work rather than every CV keyword. In `criteria` mode, preserve the user's constraints. In `combined` mode, explicit criteria constrain or override inferred preferences, while the CV determines experience-based ranking inside that scope.
@@ -76,13 +83,15 @@ Search anonymously accessible primary sources first:
 
 Use general web search to discover primary employer or ATS pages. SEEK, LinkedIn, Trade Me Jobs, aggregators, and search snippets may be discovery leads only when publicly indexed; never sign in or bypass a restriction to inspect them. Replace each lead with a currently accessible primary vacancy page before recommending it.
 
+For profile or combined searches, derive a small set of materially distinct role families from the candidate's strongest recent work and search every family. Use title variants appropriate to New Zealand employers. Do not stop after finding the first verified vacancy. Record the families, query count, discovered leads, and opened detail pages in `searchCoverage`.
+
 Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
 
 Use this failure routing:
 
 1. On a 401, 403, login wall, CAPTCHA, robots restriction, or access-denied response, stop requests to that source immediately.
 2. Search for a direct public employer or ATS copy of the vacancy.
-3. If no primary page can be opened anonymously, record the lead as unverified or omit it. Never label the access error as an expired vacancy.
+3. If public result pages or indexed snippets remain accessible, record that source as `discovery-only`; if no primary page can be opened anonymously, keep the lead unverified or omit it. Never label the access error as an expired vacancy.
 4. After two consecutive search operations return no results, stop reformulating the same query family and report the coverage limitation.
 
 Never claim that a listing was verified unless its exact detail page and application route were observed.
@@ -94,9 +103,12 @@ Before building the session, classify search coverage as `complete`, `partial`, 
 For every candidate vacancy, open the exact detail page and capture all required fields in the session JSON, including:
 
 - exact title, employer, location, arrangement, and employment type;
+- duty-derived role families, responsibility areas, and domains;
 - source and direct application URLs;
 - posting and closing dates when visible;
-- required and preferred skills based on the role's responsibilities;
+- concrete required and preferred technologies or practices;
+- eligibility requirements kept separate from technical skills;
+- compatibility fields only when the candidate evidence and JD support a definite conclusion;
 - whether the detail page opened and an application route exists;
 - visible expired or unavailable indicators;
 - verification time in `Pacific/Auckland` time;
@@ -126,6 +138,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/
 
 The runtime is authoritative for evidence validation, stale-listing rejection, deduplication, role-fit scoring, practical blockers, and Markdown formatting. Do not hand-edit scores to make a result look stronger. If validation fails, correct the evidence JSON rather than bypassing validation.
 
+The runtime separates verified recommendations from verified stretch roles. A vacancy can be open and practically possible without being a strong technical recommendation.
+
 Unless the user requests another location, write to `output/nz-jobs-YYYY-MM-DD.md` under the user's project directory. After a successful report, remove the temporary session file with `rm .nz-job-scout-session-<timestamp>.json` unless the user asks to keep the evidence. Never use a wildcard in the actual cleanup command.
 
 ### 5. Return the result
@@ -134,8 +148,10 @@ Tell the user:
 
 - the absolute report path;
 - how many listings were reviewed, recommended, rejected, or unverified;
-- the strongest verified matches and their main blockers or gaps;
+- the strongest verified recommendations, any optional stretch roles, and their main blockers or gaps;
 - whether anonymous-access limitations affected coverage.
+
+Use evidence-bounded language. With partial coverage, say “the only vacancy verified in this run” or “no additional roles were verified among accessible sources”; never say “the only current opportunity”, “the market has no other roles”, or an equivalent market-wide conclusion. Do not recommend applying merely because practical fit is high when role fit is weak.
 
 Say “Today there are no new qualified vacancies” only when `searchCoverage.status` is `complete`. For `partial`, say that no roles were found among accessible sources and that coverage was incomplete. For `blocked`, say that the search could not be completed and no conclusion can be made about vacancy availability.
 
