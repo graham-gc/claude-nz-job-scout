@@ -2,7 +2,7 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.3.3 alpha — public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates evidence, rejects stale or unsuitable listings, deduplicates, scores, and writes the report.
+> Status: **0.4.0 alpha — evidence-audited public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates provenance, derives search coverage, detects date conflicts, rejects stale or unsuitable listings, deduplicates by state, scores, and writes the report.
 
 ## What works now
 
@@ -15,8 +15,13 @@ A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, 
 - rejects expired, stale, duplicate, aggregator-only, and practically incompatible roles;
 - scores role fit separately from employment, location, availability, and work-right fit;
 - keeps evidence-backed recommendations separate from lower-alignment stretch roles;
-- records search families, query count, discovered leads, and opened detail pages;
+- records each search attempt and every discovered lead, including blocked and rejected leads;
 - distinguishes complete, partial, and blocked searches so access failures are never reported as “no vacancies”;
+- separates internship/graduate programme type, contract type, and full-/part-time workload;
+- checks structured availability windows, work rights, and hard versus preferred eligibility requirements;
+- preserves conflicting date evidence instead of silently choosing one date;
+- separates jobs from events, talent pools, and conditional recruitment programmes;
+- incrementally re-reports a role when its dates, availability, requirements, or verification state change;
 - saves a structured Markdown report.
 
 The default posting window is 30 days and can be overridden.
@@ -116,8 +121,8 @@ Replace `<absolute-path-to-your-resume>` with the path to the user's own local r
 
 1. Claude infers the search mode from the supplied resume and/or criteria, then models the candidate when a resume is available.
 2. Claude discovers and opens anonymously accessible employer, ATS, and permitted public job pages.
-3. Claude creates a temporary evidence-session JSON.
-4. `nz-job-scout` validates, filters, deduplicates, scores, and writes the report.
+3. Claude records the search funnel, evidence provenance, and assessed vacancies in a temporary session JSON.
+4. `nz-job-scout` validates, resolves evidence, filters, state-deduplicates, scores, and writes the report.
 5. Claude returns the report path and explains the strongest matches and blockers.
 
 Everything needed at runtime is included in the plugin. Users do **not** need to run `npm install`.
@@ -147,8 +152,9 @@ An access error does not prove that a vacancy has expired. The report records th
 plugins/nz-job-scout/.claude-plugin/         Plugin manifest
 plugins/nz-job-scout/skills/                 Skill and evidence contract
 plugins/nz-job-scout/bin/                    Installed command
-plugins/nz-job-scout/runtime/                Zero-dependency report runtime
-plugins/nz-job-scout/src/                    Typed development modules
+plugins/nz-job-scout/runtime/                Generated zero-dependency report runtime
+plugins/nz-job-scout/src/runtime/            Canonical TypeScript runtime source
+plugins/nz-job-scout/src/                    Supporting typed development modules
 plugins/nz-job-scout/tests/                  Unit and runtime tests
 examples/                                    Example session and report
 ```
@@ -162,6 +168,7 @@ cd plugins/nz-job-scout
 npm install
 npm run typecheck
 npm test
+npm run build:check
 node bin/nz-job-scout validate --input ../../examples/session.example.json
 node bin/nz-job-scout report --input ../../examples/session.example.json --output /tmp/nz-job-scout-report.md
 ```

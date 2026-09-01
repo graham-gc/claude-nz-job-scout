@@ -4,28 +4,46 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildReport, renderMarkdown, validateSession, writeReport } from '../runtime/scout.mjs';
+import {
+  buildReport,
+  classifyVerification,
+  deriveSearchCoverage,
+  renderMarkdown,
+  scorePracticalFit,
+  validateSession,
+  writeReport,
+} from '../runtime/scout.mjs';
 
+const verifiedAt = '2026-09-01T09:00:00+12:00';
 const candidate = {
   name: 'Test Candidate',
   targetRoleFamilies: ['Software Test Engineer', 'Java Backend'],
-  employmentTypes: ['internship', 'part-time'],
   locations: ['Auckland'],
   workArrangements: ['on-site', 'hybrid', 'remote'],
-  domains: ['test automation'],
+  availabilityWindows: [
+    { startAt: '2026-11-01', endAt: '2027-02-28', maxHoursPerWeek: 40, note: 'Scheduled summer break' },
+    { startAt: '2026-07-01', endAt: '2026-10-31', maxHoursPerWeek: 25, note: 'Teaching period' },
+  ],
+  workRights: {
+    country: 'New Zealand', status: 'temporary', unrestricted: false,
+    validUntil: '2027-12-31', visaType: 'Student Visa',
+  },
+  domains: ['test automation', 'developer productivity'],
   skills: [
     { name: 'Java', level: 'core', years: 8, lastUsedYear: 2026 },
     { name: 'Spring Boot', level: 'frequent', years: 4, lastUsedYear: 2026 },
-    { name: 'Playwright', level: 'exposure', years: 0.2, lastUsedYear: 2026 },
   ],
   capabilities: [
     { name: 'API test automation', level: 'core', years: 4, lastUsedYear: 2026 },
     { name: 'test framework development', level: 'core', years: 4, lastUsedYear: 2026 },
     { name: 'backend development', level: 'frequent', years: 4, lastUsedYear: 2026 },
-    { name: 'software product development', level: 'frequent', years: 4, lastUsedYear: 2026 },
   ],
   qualifications: ['Bachelor of Engineering', 'Master of Information Technology in progress'],
 };
+
+const observation = (value, sourceUrl = 'https://careers.example.com/jobs/NZ-101') => ({
+  value, sourceUrl, sourceType: 'employer', confidence: 'high',
+});
 
 function activeJob(overrides = {}) {
   return {
@@ -37,229 +55,179 @@ function activeJob(overrides = {}) {
     employer: 'Example Engineering',
     location: 'Auckland',
     workArrangement: 'hybrid',
-    employmentType: 'internship',
+    programmeType: 'internship',
+    contractType: 'fixed-term',
+    workload: 'full-time',
     engagementModel: 'employee',
     hoursPerWeek: 40,
-    duringScheduledBreak: true,
-    availabilityCompatible: true,
-    workRightsCompatible: true,
-    postedAt: '2026-08-25',
-    closesAt: '2026-09-30',
     summary: 'API test automation for a Java platform',
     roleFamilies: ['software test engineering', 'backend engineering'],
     responsibilityAreas: ['API test automation', 'test framework development', 'backend debugging'],
     domains: ['test automation', 'developer productivity'],
     requiredSkills: ['Java', 'API automation'],
-    preferredSkills: ['Spring Boot', 'Playwright'],
-    eligibilityRequirements: ['Currently studying a New Zealand tertiary qualification'],
-    eligibilityCompatible: true,
+    preferredSkills: ['Spring Boot'],
+    requirements: [{ category: 'study', text: 'Currently studying at a New Zealand tertiary institution', strength: 'hard', compatibility: 'met' }],
+    workRightsRequirement: { country: 'New Zealand', requiresCurrentRights: true, requiresUnrestricted: false },
+    dateEvidence: {
+      postedAt: [observation('2026-08-25')],
+      closesAt: [observation('2026-09-30')],
+      startAt: [observation('2026-11-16')],
+      endAt: [observation('2027-02-12')],
+    },
     selectionRisks: [],
     verificationEvidence: {
-      detailPageOpened: true,
-      applyRouteAvailable: true,
-      expiredIndicatorVisible: false,
-      unavailableIndicatorVisible: false,
-      verifiedAt: '2026-09-01T09:00:00+12:00',
-      notes: [],
+      detailPageOpened: true, applyRouteAvailable: true,
+      expiredIndicatorVisible: false, unavailableIndicatorVisible: false,
+      verifiedAt, notes: [],
     },
     ...overrides,
   };
 }
 
-function session(jobs = [activeJob()]) {
+function leadFor(job, overrides = {}) {
   return {
-    candidate: structuredClone(candidate),
-    preferences: {
-      mode: 'profile',
-      maxPostingAgeDays: 30,
-      employmentTypes: ['internship', 'part-time'],
-      locations: ['Auckland'],
-      workArrangements: ['on-site', 'hybrid', 'remote'],
-      maxHoursPerWeekDuringStudy: 25,
-    },
-    searchCoverage: {
-      status: 'complete',
-      searchFamilies: ['software test engineering', 'Java backend'],
-      queriesRun: 4,
-      leadsDiscovered: jobs.length,
-      detailPagesOpened: jobs.length,
-      sources: [{ name: 'Employer careers site', status: 'searched', note: 'Public vacancy and application pages opened' }],
-    },
-    assumptions: ['Full-time hours are acceptable only during a scheduled study break.'],
-    jobs,
+    title: job.title, employer: job.employer, source: job.source,
+    url: job.sourceUrl, roleFamily: job.roleFamilies[0], discoveredAt: verifiedAt,
+    detailPageOpened: true, status: 'assessed', ...overrides,
   };
 }
 
-test('validates the evidence session contract', () => {
+function session(jobs = [activeJob()], overrides = {}) {
+  const leads = jobs.map((job) => leadFor(job));
+  return {
+    candidate: structuredClone(candidate),
+    preferences: {
+      mode: 'profile', maxPostingAgeDays: 30, includeUnverified: true,
+      constraints: [
+        { field: 'programmeType', value: 'internship', strength: 'hard', source: 'user-explicit' },
+        { field: 'location', value: 'Auckland', strength: 'hard', source: 'user-explicit' },
+        { field: 'workArrangement', value: 'hybrid', strength: 'soft', source: 'skill-default' },
+      ],
+    },
+    searchCoverage: {
+      searchFamilies: ['software test engineering', 'Java backend'],
+      attempts: [
+        { roleFamily: 'software test engineering', source: 'Employer careers', query: 'software test intern Auckland', status: 'searched', leadsDiscovered: leads.length, detailPagesOpened: leads.length },
+        { roleFamily: 'Java backend', source: 'Public ATS', query: 'Java backend intern Auckland', status: 'searched', leadsDiscovered: 0, detailPagesOpened: 0 },
+      ],
+    },
+    leads,
+    assumptions: ['Only public vacancy and ATS pages were used.'],
+    jobs,
+    relatedOpportunities: [],
+    ...overrides,
+  };
+}
+
+test('validates the structured evidence session', () => {
   assert.equal(validateSession(session()).valid, true);
   const invalid = session();
-  invalid.candidate.skills[0].level = 'expert';
+  invalid.jobs[0].requirements[0].compatibility = 'maybe';
   assert.equal(validateSession(invalid).valid, false);
-  const missingCoverage = session();
-  delete missingCoverage.searchCoverage;
-  assert.equal(validateSession(missingCoverage).valid, false);
-  const combined = session();
-  combined.preferences.mode = 'combined';
-  assert.equal(validateSession(combined).valid, true);
 });
 
-test('keeps verified roles and rejects stale, aggregator, and duplicate listings', () => {
-  const result = buildReport(session([
-    activeJob(),
-    activeJob({ sourceUrl: 'https://bebee.com/nz/job/123', applicationUrl: '', requisitionId: 'AGG-1' }),
-    activeJob({ sourceUrl: 'https://nz.seek.com/job/99900002', applicationUrl: '', requisitionId: 'OLD-1', postedAt: '2026-06-01' }),
-    activeJob({ sourceUrl: 'https://nz.seek.com/job/99900003' }),
-  ]), { now: '2026-09-01T10:00:00+12:00' });
-  assert.equal(result.recommended.length, 1);
-  assert.equal(result.rejected.length, 3);
-  assert.ok(result.recommended[0].roleFit.score > 5);
-  assert.equal(result.recommended[0].practicalFit.blockers.length, 0);
+test('keeps a date-only closing deadline active for the whole Auckland day', () => {
+  const job = activeJob({ dateEvidence: { ...activeJob().dateEvidence, closesAt: [observation('2026-09-01')] } });
+  assert.equal(classifyVerification(job, session().preferences, new Date('2026-09-01T23:59:59+12:00')).status, 'verified-active');
+  assert.equal(classifyVerification(job, session().preferences, new Date('2026-09-02T00:00:01+12:00')).status, 'closed');
 });
 
-test('rejects eligibility criteria incorrectly placed in requiredSkills', () => {
-  const invalid = session([activeJob({
-    requiredSkills: ['Java', 'NZQA level 6-10 qualification'],
-    eligibilityRequirements: [],
-  })]);
-  const result = validateSession(invalid);
-  assert.equal(result.valid, false);
-  assert.match(result.errors.join('\n'), /move it to eligibilityRequirements/);
+test('treats conflicting date evidence as unverified', () => {
+  const job = activeJob({ dateEvidence: {
+    ...activeJob().dateEvidence,
+    closesAt: [observation('2026-09-18'), observation('2026-09-25', 'https://ats.example.com/NZ-101')],
+  } });
+  const result = classifyVerification(job, session().preferences, new Date('2026-09-01T10:00:00+12:00'));
+  assert.equal(result.status, 'unverified');
+  assert.match(result.reasons.join('\n'), /conflicting evidence/);
 });
 
-test('uses transferable capabilities for broad internships and keeps them as stretch roles', () => {
-  const broad = activeJob({
-    title: 'Engineering Intern - Summer 2026/27',
-    summary: 'Software, computer vision, AI and imaging product projects',
-    roleFamilies: ['software engineering', 'computer vision engineering'],
-    responsibilityAreas: ['software product development', 'AI model development', 'computer vision'],
-    domains: ['edge AI', 'smart cameras'],
-    requiredSkills: [],
-    preferredSkills: [],
-    selectionRisks: ['Most advertised projects focus on AI, computer vision, or camera hardware'],
-  });
-  const report = buildReport(session([broad]), { now: '2026-09-01T10:00:00+12:00' });
+test('recognises a full-time fixed-term summer internship as practically compatible', () => {
+  const result = scorePracticalFit(candidate, session().preferences, activeJob());
+  assert.equal(result.blockers.length, 0);
+  assert.match(result.positives.join('\n'), /availability window/);
+});
+
+test('blocks a hard eligibility requirement that is not met', () => {
+  const job = activeJob({ requirements: [{ category: 'export-control', text: 'Must satisfy ITAR citizenship rules', strength: 'hard', compatibility: 'not-met' }] });
+  const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(report.incompatible.length, 1);
+  assert.match(report.incompatible[0].practicalFit.blockers.join('\n'), /ITAR/);
+});
+
+test('derives partial coverage from attempts rather than accepting a claimed status', () => {
+  const result = deriveSearchCoverage({
+    status: 'complete',
+    searchFamilies: ['software testing', 'Java backend'],
+    attempts: [
+      { roleFamily: 'software testing', source: 'Employer careers', query: 'test', status: 'searched' },
+      { roleFamily: 'Java backend', source: 'SEEK public page', query: 'java', status: 'blocked' },
+    ],
+  }, []);
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(result.unsearchedFamilies, ['Java backend']);
+});
+
+test('separates high-value unverified leads from verified recommendations', () => {
+  const job = activeJob({ verificationEvidence: { ...activeJob().verificationEvidence, detailPageOpened: false } });
+  const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
   assert.equal(report.recommended.length, 0);
-  assert.equal(report.stretch.length, 1);
-  assert.ok(report.stretch[0].roleFit.score >= 3);
-  assert.ok(report.stretch[0].practicalFit.score < 10);
-  assert.doesNotMatch(report.stretch[0].roleFit.gaps.join('\n'), /NZQA|qualification/i);
+  assert.equal(report.manualVerification.length, 1);
 });
 
-test('does not treat Java as evidence of JavaScript experience', () => {
-  const javascriptRole = activeJob({
-    requiredSkills: ['JavaScript'],
-    responsibilityAreas: ['frontend development'],
-    roleFamilies: ['frontend engineering'],
-    domains: ['web frontend'],
-  });
-  const report = buildReport(session([javascriptRole]), { now: '2026-09-01T10:00:00+12:00' });
-  const assessed = [...report.recommended, ...report.stretch, ...report.rejected][0];
+test('lists recruitment programmes separately from job recommendations', () => {
+  const opportunity = {
+    kind: 'programme', title: 'Candidate Meet and Greet', organisation: 'Summer Programme',
+    url: 'https://programme.example.nz/event', registrationStatus: 'conditional',
+    audience: 'Candidates already registered for the programme',
+    conditions: 'Attendance is limited to accepted candidates',
+    verificationEvidence: { detailPageOpened: true, applyRouteAvailable: false, expiredIndicatorVisible: false, unavailableIndicatorVisible: false, verifiedAt },
+  };
+  const report = buildReport(session([], { leads: [], relatedOpportunities: [opportunity] }), { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(report.relatedOpportunities[0].status, 'conditional');
+  assert.equal(report.recommended.length, 0);
+  assert.match(renderMarkdown(report), /never counted as job recommendations/);
+});
+
+test('does not treat Java as JavaScript evidence', () => {
+  const job = activeJob({ requiredSkills: ['JavaScript'], roleFamilies: ['frontend engineering'], responsibilityAreas: ['frontend development'] });
+  const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
+  const assessed = [...report.recommended, ...report.stretch, ...report.lowFit, ...report.otherUnverified][0];
   assert.doesNotMatch(assessed.roleFit.evidence.join('\n'), /JavaScript: supported by Java/);
 });
 
-test('renders a Markdown report with direct evidence and rejection reasons', () => {
-  const result = buildReport(session(), { now: '2026-09-01T10:00:00+12:00' });
-  const markdown = renderMarkdown(result);
+test('renders the evidence funnel and direct vacancy evidence', () => {
+  const markdown = renderMarkdown(buildReport(session(), { now: '2026-09-01T10:00:00+12:00' }));
   assert.match(markdown, /## Verified recommendations/);
-  assert.match(markdown, /Example Engineering/);
-  assert.match(markdown, /Role fit/);
-  assert.match(markdown, /Pacific\/Auckland/);
+  assert.match(markdown, /### Search attempts/);
+  assert.match(markdown, /Leads discovered/);
+  assert.match(markdown, /Programme: internship; contract: fixed-term; workload: full-time/);
 });
 
-test('labels criteria-only results without implying CV analysis', () => {
-  const criteriaOnly = session();
-  criteriaOnly.preferences.mode = 'criteria';
-  criteriaOnly.candidate.name = 'Not supplied';
-  criteriaOnly.candidate.skills = [];
-  criteriaOnly.candidate.capabilities = [];
-  const markdown = renderMarkdown(buildReport(criteriaOnly, { now: '2026-09-01T10:00:00+12:00' }));
-  assert.match(markdown, /Criteria fit/);
-  assert.doesNotMatch(markdown, /CV emphasis/);
-});
-
-test('does not report no vacancies when search access was blocked', () => {
-  const blocked = session([]);
-  blocked.searchCoverage = {
-    status: 'blocked',
-    searchFamilies: ['software test engineering', 'Java backend'],
-    queriesRun: 2,
-    leadsDiscovered: 0,
-    detailPagesOpened: 0,
-    sources: [
-      { name: 'Employer careers site', status: 'blocked', note: '403 from anonymous request; source skipped' },
-      { name: 'Public ATS pages', status: 'unavailable', note: 'No public page could be opened' },
-    ],
-  };
-  const markdown = renderMarkdown(buildReport(blocked, { now: '2026-09-01T10:00:00+12:00' }));
-  assert.match(markdown, /Search incomplete/);
-  assert.doesNotMatch(markdown, /Today there are no new qualified vacancies/);
-});
-
-test('writes the report to disk', async () => {
-  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-'));
-  const input = join(folder, 'session.json');
-  const output = join(folder, 'report.md');
-  await writeFile(input, JSON.stringify(session()), 'utf8');
-  await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' });
-  assert.match(await readFile(output, 'utf8'), /Software Test Engineer Intern/);
-});
-
-test('appends only new jobs to an existing same-day report and leaves it unchanged when there are no new jobs', async () => {
-  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-same-day-'));
+test('appends new jobs, suppresses unchanged jobs, and re-reports changed state', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-history-'));
   const input = join(folder, 'session.json');
   const output = join(folder, 'nz-jobs-2026-09-01.md');
-  const secondJob = activeJob({
-    sourceUrl: 'https://careers.example.net/jobs/NZ-202',
-    applicationUrl: 'https://careers.example.net/jobs/NZ-202/apply',
-    requisitionId: 'NZ-202',
-    title: 'Java Backend Intern',
-    employer: 'Second Engineering',
-  });
-
   await writeFile(input, JSON.stringify(session()), 'utf8');
-  const first = await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' });
-  assert.equal(first.writeAction, 'created');
-  const original = await readFile(output, 'utf8');
-  const originalFirstRoleCount = original.split('Software Test Engineer Intern').length - 1;
+  assert.equal((await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' })).writeAction, 'created');
+  assert.equal((await writeReport(input, output, { now: '2026-09-01T12:00:00+12:00' })).writeAction, 'unchanged');
 
-  await writeFile(input, JSON.stringify(session([activeJob(), secondJob])), 'utf8');
-  const second = await writeReport(input, output, { now: '2026-09-01T14:00:00+12:00' });
-  assert.equal(second.writeAction, 'appended');
-  assert.equal(second.excludedPreviouslyReported, 1);
-  const updated = await readFile(output, 'utf8');
-  assert.ok(updated.startsWith(original));
-  assert.match(updated, /## Incremental scan/);
-  assert.match(updated, /Java Backend Intern/);
-  assert.equal(updated.split('Software Test Engineer Intern').length - 1, originalFirstRoleCount);
-
-  const third = await writeReport(input, output, { now: '2026-09-01T18:00:00+12:00' });
-  assert.equal(third.writeAction, 'unchanged');
-  assert.equal(third.excludedPreviouslyReported, 2);
-  assert.equal(await readFile(output, 'utf8'), updated);
+  const changed = activeJob({ dateEvidence: { ...activeJob().dateEvidence, closesAt: [observation('2026-10-05')] } });
+  await writeFile(input, JSON.stringify(session([changed])), 'utf8');
+  const update = await writeReport(input, output, { now: '2026-09-01T14:00:00+12:00' });
+  const markdown = await readFile(output, 'utf8');
+  assert.equal(update.writeAction, 'appended');
+  assert.equal(update.updatedListingsCount, 1);
+  assert.match(markdown, /Updated evidence/);
+  assert.match(markdown, /2026-10-05/);
 });
 
-test('excludes jobs from earlier daily reports when creating the next day report', async () => {
+test('excludes unchanged roles from earlier daily reports', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-next-day-'));
   const input = join(folder, 'session.json');
-  const firstOutput = join(folder, 'nz-jobs-2026-09-01.md');
-  const nextOutput = join(folder, 'nz-jobs-2026-09-02.md');
-  const nextJob = activeJob({
-    sourceUrl: 'https://careers.example.org/jobs/NZ-303',
-    applicationUrl: 'https://careers.example.org/jobs/NZ-303/apply',
-    requisitionId: 'NZ-303',
-    title: 'API Automation Intern',
-    employer: 'Next Day Systems',
-  });
-
   await writeFile(input, JSON.stringify(session()), 'utf8');
-  await writeReport(input, firstOutput, { now: '2026-09-01T10:00:00+12:00' });
-  await writeFile(input, JSON.stringify(session([activeJob(), nextJob])), 'utf8');
-  const result = await writeReport(input, nextOutput, { now: '2026-09-02T09:00:00+12:00' });
-  const markdown = await readFile(nextOutput, 'utf8');
-
-  assert.equal(result.writeAction, 'created');
+  await writeReport(input, join(folder, 'nz-jobs-2026-09-01.md'), { now: '2026-09-01T10:00:00+12:00' });
+  const result = await writeReport(input, join(folder, 'nz-jobs-2026-09-02.md'), { now: '2026-09-02T09:00:00+12:00' });
   assert.equal(result.excludedPreviouslyReported, 1);
-  assert.doesNotMatch(markdown, /Software Test Engineer Intern/);
-  assert.match(markdown, /API Automation Intern/);
-  assert.match(markdown, /Previously reported listings excluded: 1/);
+  assert.equal(result.newListingsCount, 0);
 });

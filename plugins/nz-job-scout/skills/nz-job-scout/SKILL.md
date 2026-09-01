@@ -1,6 +1,6 @@
 ---
 name: nz-job-scout
-description: Use when the user wants to analyse a local PDF or Markdown CV, search publicly accessible New Zealand job sources, verify job listings, compare role fit, or produce a Markdown job report without authenticated accounts.
+description: Analyse a local PDF or Markdown CV and/or user criteria, research publicly accessible New Zealand vacancies, verify evidence, assess genuine experience fit, and save a Markdown job report without authenticated accounts.
 allowed-tools:
   - Read
   - Edit(.nz-job-scout-session-*.json)
@@ -17,162 +17,145 @@ allowed-tools:
 
 Find real, currently available New Zealand vacancies and assess them against the candidate's actual experience, constraints, and goals.
 
-## Required inputs
+## Inputs and modes
 
-Accept either or both of these inputs:
+Accept a CV path (`.pdf` or `.md`), explicit search criteria, or both. Infer the mode:
 
-- a CV path (`.pdf` or `.md`) or candidate profile already supplied in the conversation;
-- explicit search criteria, including any combination of role titles, keywords, employment types, locations, work arrangements, availability, work-right constraints, and posting-age window.
+- `profile`: candidate evidence without explicit job criteria;
+- `criteria`: explicit criteria without candidate evidence;
+- `combined`: both.
 
-Do not require the user to name a search mode. Infer it from the supplied inputs:
-
-- `profile`: a CV or candidate profile is supplied without explicit job criteria;
-- `criteria`: explicit job criteria are supplied without a CV or candidate profile;
-- `combined`: both are supplied.
-
-At least one of a candidate profile or explicit search criteria is required. If neither is available, ask one concise question requesting either a resume path or the desired job criteria.
+At least one is required. Do not ask for information already present in the CV or conversation. Ask one concise question only when an omitted fact would materially change the eligible job set; otherwise state a conservative assumption.
 
 Defaults:
 
 - maximum posting age: 30 days;
-- vacancy state: currently open with a directly verified application route;
-- geography: New Zealand, unless the user or candidate context supplies a narrower constraint;
-- employment type and work arrangement: do not invent restrictive filters when they cannot be inferred reliably.
+- state: currently open with a directly verified application route;
+- geography: New Zealand unless narrowed by user or supported context;
+- no invented employment-type, location, work-right, or arrangement restrictions.
 
-Do not repeatedly ask for information already present in the CV or conversation. If a missing preference would materially change results, ask one concise question; otherwise use a conservative assumption and disclose it.
+Before research, read [references/session-format.md](references/session-format.md) completely. It is the evidence contract used by the deterministic runtime.
 
-Before searching, read `${CLAUDE_PLUGIN_ROOT}/skills/nz-job-scout/references/session-format.md` completely. It is the contract between browser research and the deterministic report runtime.
+## Public-source boundary
 
-## Workflow
+Use only anonymously accessible information. Never request, inspect, import, export, or retain cookies, passwords, tokens, browser storage, private profiles, logged-in sessions, paid extensions, or employer-only partner credentials.
 
-### 0. Enforce the public-source boundary
+Prefer primary sources:
 
-Use only information that is anonymously accessible without an account, session, private browser profile, paid browser extension, or partner credential.
+- employer career sites;
+- public ATS pages and feeds such as Workday, Greenhouse, Lever, SmartRecruiters, Ashby, and BambooHR;
+- public-sector, university, and permitted public job-board pages.
 
-Never request, inspect, accept, import, export, or persist cookies, passwords, access tokens, browser storage, user profiles, or SEEK Partner credentials. Do not ask the user to install Claude in Chrome or connect a logged-in browser.
+Use general search, SEEK, LinkedIn, Trade Me Jobs, aggregators, and indexed snippets only for discovery when publicly visible. A discovery result is not verification. Replace it with the exact public employer or ATS vacancy page before recommending it.
 
-Do not use automated data gathering on a source that prohibits it. Public search snippets may identify leads, but they are not verification evidence. Prefer an employer's own careers site or public ATS page as both the evidence and final application link.
+On a login wall, CAPTCHA, 401, 403, robots restriction, or access denial, stop using that source for the run. Look for a public primary copy and record the limitation. Do not evade, retry repeatedly, or interpret access failure as evidence that a role is closed.
 
-When a source returns a login wall, CAPTCHA, 401, 403, robots restriction, or access-denied response, stop using that source for the current run. Search for an anonymously accessible employer or ATS copy and record the original source as blocked or unavailable. Do not bypass, evade, or repeatedly retry the restriction.
+## Candidate model
 
-### 1. Read and model the candidate
+For `profile` and `combined` modes, read the complete CV. Use document reading for PDF and direct text reading for Markdown.
 
-In `profile` or `combined` mode, read the complete CV. For PDF input, use Claude's document-reading capability; for Markdown, read the source text directly.
-
-Build the `candidate` object described in the session-format reference. Classify each skill as `core`, `frequent`, `working`, or `exposure`. Base this on duration, repeated use, recency, project ownership, production responsibility, and outcomes. A technology is not a strong skill merely because it appears once.
-
-Model two distinct kinds of evidence:
+Model:
 
 - `skills`: concrete languages, frameworks, databases, protocols, and tools;
-- `capabilities`: work repeatedly performed, such as backend development, API automation, performance testing, debugging, internal-tool delivery, or technical support.
+- `capabilities`: work repeatedly performed, such as backend development, API automation, performance testing, debugging, internal tooling, or technical support;
+- `qualifications`, structured availability windows, and structured work rights separately.
 
-Record qualifications separately. Never treat a degree, NZQA level, current-student status, work-right condition, or other eligibility rule as a missing technical skill. Conversely, do not award AI/ML, cloud, frontend, mobile, or another specialty merely because the CV contains a nearby term. Actual sustained duties and demonstrated ownership outweigh keyword counts.
+Classify skills and capabilities as `core`, `frequent`, `working`, or `exposure` from duration, repetition, recency, ownership, production responsibility, and outcomes. Keyword presence alone is not evidence of proficiency. Do not infer AI/ML, cloud, frontend, mobile, or another speciality from an adjacent term.
 
-In `criteria` mode, do not claim to have assessed personal fit. Build the minimal candidate object required by the evidence contract from only the user's stated criteria, leaving unsupported skills and personal constraints empty.
+In `criteria` mode, create the neutral candidate object defined in the reference. Do not imply that a CV or personal fit was assessed.
 
-Resolve search scope before browsing. In `profile` mode, derive role families and useful query variants from sustained, recent work rather than every CV keyword. In `criteria` mode, preserve the user's constraints. In `combined` mode, explicit criteria constrain or override inferred preferences, while the CV determines experience-based ranking inside that scope.
+## Search and audit trail
 
-### 2. Search public sources
+In profile or combined mode, derive several materially distinct role families from sustained recent work. Search each family with New Zealand title variants; finding one vacancy is not a stopping condition. In criteria mode, preserve explicit scope.
 
-Search anonymously accessible primary sources first:
+For every search operation, record a `searchCoverage.attempts[]` entry with its role family, source, exact query, result status, discovered-lead count, opened-detail count, and limitation note. Record every discovered lead in `leads[]`, including duplicates, inaccessible pages, out-of-scope results, and leads that were never opened. This creates an auditable funnel:
 
-- employer career websites;
-- public ATS pages, including Workday, Greenhouse, Lever, SmartRecruiters, Ashby, and BambooHR;
-- public sector and university career sites;
-- public job-board pages or feeds whose access rules allow the current research method.
+`query -> discovered lead -> opened detail page -> assessed listing -> recommendation/rejection`
 
-Use general web search to discover primary employer or ATS pages. SEEK, LinkedIn, Trade Me Jobs, aggregators, and search snippets may be discovery leads only when publicly indexed; never sign in or bypass a restriction to inspect them. Replace each lead with a currently accessible primary vacancy page before recommending it.
+Do not set coverage status manually. The runtime derives `complete`, `partial`, or `blocked` from the attempts:
 
-For profile or combined searches, derive a small set of materially distinct role families from the candidate's strongest recent work and search every family. Use title variants appropriate to New Zealand employers. Do not stop after finding the first verified vacancy. Record the families, query count, discovered leads, and opened detail pages in `searchCoverage`.
+- `searched`: primary results were inspected;
+- `discovery-only`: leads were visible but primary details could not be verified;
+- `blocked` or `unavailable`: access failed;
+- `skipped`: deliberately not searched, with a reason.
 
-Do not return full-time permanent roles when the requested scope is internships or part-time work merely because technical keywords match.
+After two consecutive empty operations for the same family/source approach, stop reformulating it and record the limitation.
 
-Use this failure routing:
+### Structured public evidence
 
-1. On a 401, 403, login wall, CAPTCHA, robots restriction, or access-denied response, stop requests to that source immediately.
-2. Search for a direct public employer or ATS copy of the vacancy.
-3. If public result pages or indexed snippets remain accessible, record that source as `discovery-only`; if no primary page can be opened anonymously, keep the lead unverified or omit it. Never label the access error as an expired vacancy.
-4. After two consecutive search operations return no results, stop reformulating the same query family and report the coverage limitation.
+When the visible page is sparse, inspect public page data without bypassing access controls. Prefer, in order:
 
-Never claim that a listing was verified unless its exact detail page and application route were observed.
+1. visible employer or ATS job content;
+2. public `JobPosting` JSON-LD embedded in that exact page;
+3. public ATS JSON endpoints linked to the vacancy;
+4. employer or ATS sitemaps for discovery;
+5. indexed snippets only as low-confidence discovery evidence.
 
-Before building the session, classify search coverage as `complete`, `partial`, or `blocked` according to the session-format reference. Access errors belong in `searchCoverage.sources`, not only in assumptions. Never equate zero collected listings with a complete search.
+Structured data may support title, organisation, location, posting date, closing date, employment terms, and application URL. Record its source URL and `sourceType`; do not silently merge conflicting dates.
 
-### 3. Build an evidence session
+## Build the evidence session
 
-For every candidate vacancy, open the exact detail page and capture all required fields in the session JSON, including:
+Create `.nz-job-scout-session-<timestamp>.json` in the user's current project directory. Do not place it in the plugin installation or store credentials, raw browser state, or unnecessary CV contents.
 
-- exact title, employer, location, arrangement, and employment type;
-- duty-derived role families, responsibility areas, and domains;
-- source and direct application URLs;
-- posting and closing dates when visible;
-- concrete required and preferred technologies or practices;
-- eligibility requirements kept separate from technical skills;
-- compatibility fields only when the candidate evidence and JD support a definite conclusion;
-- whether the detail page opened and an application route exists;
-- visible expired or unavailable indicators;
-- verification time in `Pacific/Auckland` time;
-- availability and work-right compatibility only when supported by evidence.
+For each assessed vacancy record:
 
-Also record every intended public source and its search status. If a requested source blocks anonymous access, coverage is `partial` when another primary source was successfully searched and `blocked` when none was searched. A blocked or partial run may still produce a diagnostic report, but it must not conclude that no suitable vacancies exist.
+- programme type, contract type, and workload as separate dimensions;
+- engagement model, location, arrangement, hours, duties, and technology requirements;
+- primary source and application URLs;
+- every observed posting, closing, start, and end date with provenance and confidence;
+- hard eligibility rules and selection preferences separately, each with `met`, `not-met`, or `unknown` compatibility;
+- explicit work-right requirements separately from candidate work rights;
+- exact detail-page and application-route evidence with a `Pacific/Auckland` verification time.
 
-Create the JSON as a temporary file outside the plugin installation directory. Do not store credentials or browser state. Never bypass CAPTCHAs, rate limits, access controls, robots restrictions, or site restrictions; skip the affected source and record the reduced coverage.
+Do not confuse a full-time fixed-term summer internship with permanent full-time employment. A temporary student visa is not unrestricted work rights. `unknown` is safer than an unsupported `met`.
 
-Use `.nz-job-scout-session-<timestamp>.json` in the user's current project directory for the temporary evidence file. This predictable, private-to-the-run filename keeps write and cleanup permission narrowly scoped. Do not place the temporary file in the plugin directory or use another location unless the user explicitly requests it.
+Treat events, talent pools, candidate programmes, and recruitment channels as `relatedOpportunities[]`, not jobs. Preserve conditional audiences: for example, an event open only to candidates already registered for a programme is `conditional`, not generally open. Do not encode one user's channel preference as a universal exclusion.
 
-### 4. Validate and generate the report
+## Validate and report
 
-Run the bundled, dependency-free runtime. Quote all paths.
+Quote paths and run:
 
 ```bash
-nz-job-scout validate --input "/absolute/path/to/session.json"
-nz-job-scout report --input "/absolute/path/to/session.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
+nz-job-scout validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
+nz-job-scout report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
 ```
 
-If the executable is not on `PATH`, use:
+If the installed command is unavailable:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/session.json"
-node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/session.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
 ```
 
-The runtime is authoritative for evidence validation, stale-listing rejection, deduplication, role-fit scoring, practical blockers, and Markdown formatting. Do not hand-edit scores to make a result look stronger. If validation fails, correct the evidence JSON rather than bypassing validation.
+The runtime is authoritative for validation, date conflicts, search coverage, deduplication, fit scoring, eligibility blockers, categorisation, and Markdown output. Correct invalid evidence instead of bypassing validation or hand-editing scores.
 
-The runtime separates verified recommendations from verified stretch roles. A vacancy can be open and practically possible without being a strong technical recommendation.
+The report separates:
 
-Unless the user requests another location, write to `output/nz-jobs-YYYY-MM-DD.md` under the user's project directory. After a successful report, remove the temporary session file with `rm .nz-job-scout-session-<timestamp>.json` unless the user asks to keep the evidence. Never use a wildcard in the actual cleanup command.
+- verified recommendations;
+- verified stretch roles;
+- high-value leads requiring manual verification;
+- verified closed or unavailable roles;
+- practically incompatible roles;
+- verified low-fit roles;
+- other rejected or unverified items;
+- related opportunities and recruitment channels.
 
-### 5. Return the result
+If today's report already exists, the runtime appends only new or materially changed items. Across recent daily reports, unchanged roles are suppressed. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`.
 
-Tell the user:
+After a successful report, remove the exact temporary session filename unless the user asks to keep it. Never use a wildcard in the cleanup command.
 
-- the absolute report path;
-- how many listings were reviewed, recommended, rejected, or unverified;
-- the strongest verified recommendations, any optional stretch roles, and their main blockers or gaps;
-- whether anonymous-access limitations affected coverage.
+## Return the result
 
-Use evidence-bounded language. With partial coverage, say “the only vacancy verified in this run” or “no additional roles were verified among accessible sources”; never say “the only current opportunity”, “the market has no other roles”, or an equivalent market-wide conclusion. Do not recommend applying merely because practical fit is high when role fit is weak.
+Give the absolute report path, the search funnel counts, strongest verified roles, manual-verification leads, blockers, and coverage limits. Do not recommend a role merely because logistics fit when the day-to-day work fit is weak.
 
-Say “Today there are no new qualified vacancies” only when `searchCoverage.status` is `complete`. For `partial`, say that no roles were found among accessible sources and that coverage was incomplete. For `blocked`, say that the search could not be completed and no conclusion can be made about vacancy availability.
+Use bounded language:
 
-When coverage is blocked because no public primary source was accessible, finish with a diagnostic report. Do not ask the user for credentials, a browser session, or special authenticated access.
+- complete coverage with no qualifying roles: “Today there are no new qualified vacancies.”
+- partial coverage: “No additional roles were verified among accessible sources; coverage was incomplete.”
+- blocked coverage: “The search could not be completed, so no conclusion can be made about vacancy availability.”
 
-## Search modes
-
-Select the mode automatically; the user never needs to pass a mode flag.
-
-### Profile
-
-Use when a resume or candidate profile is supplied without explicit job criteria. Derive several focused search families from the candidate's sustained, recent, and demonstrably strong work. Default to active New Zealand vacancies posted in the last 30 days. Do not narrow location, employment type, or work arrangement without supporting candidate context.
-
-### Criteria
-
-Use when search conditions are supplied without a resume. Treat those conditions as the source of truth. Synonymous query variants may be used for discovery, but do not silently broaden material constraints. Rank by criteria relevance and practical compatibility; do not present a personalised CV-match score.
-
-### Combined
-
-Use when both a resume and search conditions are supplied. Explicit conditions define the eligible vacancy set. Use the resume to rank those vacancies by real experience depth, recency, ownership, and outcomes. Never discard an explicit condition merely because a broader role would fit the CV.
+Never claim market-wide absence from a partial or blocked run.
 
 ## Action boundary
 
-Searching, reading, comparing, and writing a local report are allowed. Applying, uploading a CV, sending a message, creating an account, or submitting personal data requires explicit approval at the moment of action. This skill performs an interactive search; it is not an unattended background crawler or application bot.
+Searching, reading, comparing, and writing the local report are allowed. Applying, uploading a CV, sending messages, creating accounts, or submitting personal information requires explicit approval at that moment. This skill is an interactive research workflow, not an unattended crawler or application bot.

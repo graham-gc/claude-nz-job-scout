@@ -3,15 +3,15 @@
   "search": {
     "mode": "profile",
     "maxPostingAgeDays": 30,
-    "employmentTypes": ["internship", "part-time"],
-    "locations": ["Auckland"],
-    "workArrangements": ["on-site", "hybrid", "remote"],
-    "includeUnverified": false
+    "includeUnverified": true,
+    "constraints": [
+      { "field": "programmeType", "value": "internship", "strength": "hard", "source": "user-explicit" },
+      { "field": "location", "value": "Auckland", "strength": "hard", "source": "user-explicit" },
+      { "field": "workArrangement", "value": "hybrid", "strength": "soft", "source": "skill-default" }
+    ]
   },
-  "availability": {
-    "duringSemester": "Up to the hours permitted by the candidate's visa",
-    "scheduledBreaks": "Full-time",
-    "earliestStart": "2026-11"
-  },
-  "outputPath": "output/nz-jobs-2026-08-31.md"
+  "availabilityWindows": [
+    { "startAt": "2026-11-01", "endAt": "2027-02-28", "maxHoursPerWeek": 40, "note": "Scheduled summer break" }
+  ],
+  "outputPath": "output/nz-jobs-YYYY-MM-DD.md"
 }

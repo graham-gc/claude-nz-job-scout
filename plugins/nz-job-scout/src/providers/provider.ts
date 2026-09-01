@@ -14,6 +14,8 @@ export interface PublicSearchProvider {
   verify(job: JobPosting): Promise<VerificationEvidence>;
 }
 
+/** Discovery adapters use public pages and public ATS data only. */
+
 export const providerCatalogue = [
   {
     id: 'greenhouse',

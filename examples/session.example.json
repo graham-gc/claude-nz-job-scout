@@ -2,14 +2,22 @@
   "candidate": {
     "name": "Example Candidate",
     "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
-    "employmentTypes": ["internship", "part-time"],
     "locations": ["Auckland"],
     "workArrangements": ["on-site", "hybrid", "remote"],
-    "availability": "Full-time during a scheduled summer break; up to 25 hours during study periods",
-    "workRights": "New Zealand student visa with work-hour conditions",
+    "availabilityWindows": [
+      { "startAt": "2026-11-01", "endAt": "2027-02-28", "maxHoursPerWeek": 40, "note": "Scheduled summer break" },
+      { "startAt": "2026-07-01", "endAt": "2026-10-31", "maxHoursPerWeek": 25, "note": "Teaching period" }
+    ],
+    "workRights": {
+      "country": "New Zealand",
+      "status": "temporary",
+      "unrestricted": false,
+      "validUntil": "2027-12-31",
+      "visaType": "Student Visa"
+    },
     "domains": ["API test automation", "developer productivity"],
     "skills": [
-      { "name": "Java", "level": "core", "years": 8, "lastUsedYear": 2026, "evidence": ["Backend and test platform development"] },
+      { "name": "Java", "level": "core", "years": 8, "lastUsedYear": 2026, "evidence": ["Backend and test-platform development"] },
       { "name": "Spring Boot", "level": "frequent", "years": 4, "lastUsedYear": 2026, "evidence": ["Built an API automation platform"] },
       { "name": "SQL", "level": "frequent", "years": 8, "lastUsedYear": 2026, "evidence": ["Relational data and test analysis"] }
     ],
@@ -23,20 +31,50 @@
     "mode": "profile",
     "keywords": [],
     "maxPostingAgeDays": 30,
-    "employmentTypes": ["internship", "part-time"],
-    "locations": ["Auckland"],
-    "workArrangements": ["on-site", "hybrid", "remote"],
-    "maxHoursPerWeekDuringStudy": 25,
-    "includeUnverified": false
+    "includeUnverified": true,
+    "constraints": [
+      { "field": "programmeType", "value": "internship", "strength": "hard", "source": "conversation-context" },
+      { "field": "location", "value": "Auckland", "strength": "hard", "source": "conversation-context" },
+      { "field": "workArrangement", "value": "hybrid", "strength": "soft", "source": "resume-inferred" }
+    ]
   },
   "searchCoverage": {
-    "status": "complete",
     "searchFamilies": ["software test engineering", "Java backend"],
-    "queriesRun": 4,
-    "leadsDiscovered": 1,
-    "detailPagesOpened": 1,
-    "sources": [{ "name": "Employer careers site", "status": "searched", "note": "Example public-page verification" }]
+    "attempts": [
+      {
+        "roleFamily": "software test engineering",
+        "source": "Employer careers site",
+        "query": "software test engineer internship Auckland",
+        "status": "searched",
+        "leadsDiscovered": 1,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true,
+        "note": "Example public-page verification"
+      },
+      {
+        "roleFamily": "Java backend",
+        "source": "Public ATS pages",
+        "query": "Java backend internship Auckland",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true,
+        "note": "Example public ATS search"
+      }
+    ]
   },
+  "leads": [
+    {
+      "title": "Software Test Engineer Intern",
+      "employer": "Example Engineering",
+      "source": "Employer careers site",
+      "url": "https://careers.example.com/jobs/NZ-101",
+      "roleFamily": "software test engineering",
+      "discoveredAt": "2026-09-01T09:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "assessed"
+    }
+  ],
   "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],
   "jobs": [
     {
@@ -48,22 +86,38 @@
       "employer": "Example Engineering",
       "location": "Auckland",
       "workArrangement": "hybrid",
-      "employmentType": "internship",
+      "programmeType": "internship",
+      "contractType": "fixed-term",
+      "workload": "full-time",
       "engagementModel": "employee",
       "hoursPerWeek": 40,
-      "duringScheduledBreak": true,
-      "availabilityCompatible": true,
-      "workRightsCompatible": true,
-      "postedAt": "2026-08-25",
-      "closesAt": "2026-09-30",
       "summary": "API test automation for a Java service platform",
       "roleFamilies": ["software test engineering", "backend engineering"],
       "responsibilityAreas": ["API test automation", "test framework development", "backend debugging"],
       "domains": ["software quality", "developer productivity"],
       "requiredSkills": ["Java", "API automation"],
       "preferredSkills": ["Spring Boot", "SQL"],
-      "eligibilityRequirements": ["Currently studying a New Zealand tertiary qualification"],
-      "eligibilityCompatible": true,
+      "requirements": [
+        {
+          "category": "study",
+          "text": "Currently studying at a New Zealand tertiary institution",
+          "strength": "hard",
+          "compatibility": "met",
+          "sourceUrl": "https://careers.example.com/jobs/NZ-101"
+        }
+      ],
+      "workRightsRequirement": {
+        "country": "New Zealand",
+        "requiresCurrentRights": true,
+        "requiresUnrestricted": false,
+        "sponsorshipAvailable": false
+      },
+      "dateEvidence": {
+        "postedAt": [{ "value": "2026-08-25", "sourceUrl": "https://careers.example.com/jobs/NZ-101", "sourceType": "employer", "confidence": "high" }],
+        "closesAt": [{ "value": "2026-09-30", "sourceUrl": "https://careers.example.com/jobs/NZ-101", "sourceType": "employer", "confidence": "high" }],
+        "startAt": [{ "value": "2026-11-16", "sourceUrl": "https://careers.example.com/jobs/NZ-101", "sourceType": "employer", "confidence": "high" }],
+        "endAt": [{ "value": "2027-02-12", "sourceUrl": "https://careers.example.com/jobs/NZ-101", "sourceType": "employer", "confidence": "high" }]
+      },
       "selectionRisks": [],
       "verificationEvidence": {
         "detailPageOpened": true,
@@ -74,5 +128,6 @@
         "notes": ["Example data only"]
       }
     }
-  ]
+  ],
+  "relatedOpportunities": []
 }
