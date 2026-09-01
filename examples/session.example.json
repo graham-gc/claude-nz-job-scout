@@ -24,6 +24,11 @@
     "maxHoursPerWeekDuringStudy": 25,
     "includeUnverified": false
   },
+  "searchCoverage": {
+    "status": "complete",
+    "interactiveBrowserUsed": true,
+    "sources": [{ "name": "SEEK", "status": "searched", "note": "Example browser verification" }]
+  },
   "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],
   "jobs": [
     {

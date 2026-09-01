@@ -64,6 +64,11 @@ function session(jobs = [activeJob()]) {
       workArrangements: ['on-site', 'hybrid', 'remote'],
       maxHoursPerWeekDuringStudy: 25,
     },
+    searchCoverage: {
+      status: 'complete',
+      interactiveBrowserUsed: true,
+      sources: [{ name: 'SEEK', status: 'searched', note: 'Results and application routes opened in browser' }],
+    },
     assumptions: ['Full-time hours are acceptable only during a scheduled study break.'],
     jobs,
   };
@@ -74,6 +79,12 @@ test('validates the evidence session contract', () => {
   const invalid = session();
   invalid.candidate.skills[0].level = 'expert';
   assert.equal(validateSession(invalid).valid, false);
+  const missingCoverage = session();
+  delete missingCoverage.searchCoverage;
+  assert.equal(validateSession(missingCoverage).valid, false);
+  const combined = session();
+  combined.preferences.mode = 'combined';
+  assert.equal(validateSession(combined).valid, true);
 });
 
 test('keeps verified roles and rejects stale, aggregator, and duplicate listings', () => {
@@ -95,6 +106,32 @@ test('renders a Markdown report with direct evidence and rejection reasons', () 
   assert.match(markdown, /## Verified roles/);
   assert.match(markdown, /Example Engineering/);
   assert.match(markdown, /Role fit/);
+  assert.match(markdown, /Pacific\/Auckland/);
+});
+
+test('labels criteria-only results without implying CV analysis', () => {
+  const criteriaOnly = session();
+  criteriaOnly.preferences.mode = 'criteria';
+  criteriaOnly.candidate.name = 'Not supplied';
+  criteriaOnly.candidate.skills = [];
+  const markdown = renderMarkdown(buildReport(criteriaOnly, { now: '2026-09-01T10:00:00+12:00' }));
+  assert.match(markdown, /Criteria fit/);
+  assert.doesNotMatch(markdown, /CV emphasis/);
+});
+
+test('does not report no vacancies when search access was blocked', () => {
+  const blocked = session([]);
+  blocked.searchCoverage = {
+    status: 'blocked',
+    interactiveBrowserUsed: false,
+    sources: [
+      { name: 'SEEK', status: 'blocked', note: '403 from direct request; no interactive browser available' },
+      { name: 'LinkedIn', status: 'unavailable', note: 'Interactive browser unavailable' },
+    ],
+  };
+  const markdown = renderMarkdown(buildReport(blocked, { now: '2026-09-01T10:00:00+12:00' }));
+  assert.match(markdown, /Search incomplete/);
+  assert.doesNotMatch(markdown, /Today there are no new qualified vacancies/);
 });
 
 test('writes the report to disk', async () => {
