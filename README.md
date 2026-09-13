@@ -2,7 +2,7 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.4.0 alpha — evidence-audited public-source MVP.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates provenance, derives search coverage, detects date conflicts, rejects stale or unsuitable listings, deduplicates by state, scores, and writes the report.
+> Status: **0.5.0 alpha — adaptive high-recall public-source search.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates provenance and discovery-plan coverage, detects date conflicts, rejects stale or unsuitable listings, deduplicates by state, scores, and writes the report.
 
 ## What works now
 
@@ -16,6 +16,9 @@ A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, 
 - scores role fit separately from employment, location, availability, and work-right fit;
 - keeps evidence-backed recommendations separate from lower-alignment stretch roles;
 - records each search attempt and every discovered lead, including blocked and rejected leads;
+- uses broad discovery plus source-inventory scans instead of trying to enumerate every possible title-and-skill query;
+- expands a relevant employer's current vacancy inventory when any related role reveals that employer;
+- requires both discovery routes and required employer expansions before reporting complete coverage;
 - distinguishes complete, partial, and blocked searches so access failures are never reported as “no vacancies”;
 - separates internship/graduate programme type, contract type, and full-/part-time workload;
 - checks structured availability windows, work rights, and hard versus preferred eligibility requirements;

@@ -95,16 +95,40 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
     "attempts": [
       {
         "roleFamily": "software test engineering",
-        "source": "Employer careers",
+        "strategy": "broad-discovery",
+        "source": "Web search",
         "query": "software test internship Auckland",
         "status": "searched",
         "leadsDiscovered": 2,
         "detailPagesOpened": 1,
         "requiredForCoverage": true,
-        "note": "Public vacancy pages inspected"
+        "note": "Broad discovery results inspected"
+      },
+      {
+        "roleFamily": "software test engineering",
+        "strategy": "source-inventory",
+        "source": "Employer careers",
+        "query": "Example Engineering current vacancies",
+        "status": "searched",
+        "leadsDiscovered": 1,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true,
+        "note": "Employer vacancy inventory inspected"
       },
       {
         "roleFamily": "Java backend",
+        "strategy": "broad-discovery",
+        "source": "Web search",
+        "query": "backend intern Auckland",
+        "status": "searched",
+        "leadsDiscovered": 1,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true,
+        "note": "A public job-board lead was discovered"
+      },
+      {
+        "roleFamily": "Java backend",
+        "strategy": "source-inventory",
         "source": "SEEK public pages",
         "query": "Java backend internship Auckland",
         "status": "discovery-only",
@@ -112,6 +136,18 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         "detailPagesOpened": 0,
         "requiredForCoverage": true,
         "note": "Indexed result found; exact detail page was not anonymously accessible"
+      },
+      {
+        "roleFamily": "Java backend",
+        "strategy": "employer-expansion",
+        "employer": "Example Systems",
+        "source": "Employer careers",
+        "query": "Example Systems Auckland vacancies",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true,
+        "note": "The public employer inventory contained no additional current roles"
       }
     ]
   },
@@ -124,7 +160,9 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "roleFamily": "software test engineering",
       "discoveredAt": "2026-09-01T09:00:00+12:00",
       "detailPageOpened": true,
-      "status": "assessed"
+      "status": "assessed",
+      "employerExpansionRequired": false,
+      "employerExpansionReason": "The lead came from the employer careers inventory already inspected in this run"
     },
     {
       "title": "Java Intern",
@@ -135,6 +173,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "discoveredAt": "2026-09-01T09:10:00+12:00",
       "detailPageOpened": false,
       "status": "not-opened",
+      "employerExpansionRequired": true,
+      "employerExpansionReason": "The employer was discovered through a restricted job-board detail page and its vacancy inventory has not been inspected",
       "reason": "Exact detail page was not anonymously accessible and no primary copy was found"
     }
   ],
@@ -274,7 +314,10 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 - Record every search operation in `attempts`; the runtime derives coverage and ignores any hand-written `status`.
 - Every discovered lead belongs in `leads`, even if duplicated, inaccessible, out of scope, or not opened.
 - A non-`assessed` lead requires a reason.
-- `complete` requires at least one successful search attempt for every intended role family and no material required-source failure. Otherwise coverage is partial or blocked.
+- Every attempt declares one strategy: `broad-discovery`, `source-inventory`, `employer-expansion`, or `focused-follow-up`. `searched` means the intended result set or public inventory was inspected; it does not by itself verify any discovered vacancy.
+- `complete` requires a successful broad-discovery and source-inventory attempt for every intended family, successful expansion of every employer marked as requiring it, and no material required-source failure. Otherwise coverage is partial or blocked.
+- Broad discovery intentionally avoids unnecessary technology constraints. Technology and duty fit are evaluated after candidates are collected.
+- Every lead records `employerExpansionRequired` and a reason. A role that is closed, senior, permanent, or otherwise unsuitable can still reveal an employer whose current inventory must be inspected.
 
 ### Jobs and dates
 

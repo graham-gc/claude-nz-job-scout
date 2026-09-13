@@ -88,7 +88,8 @@ function leadFor(job, overrides = {}) {
   return {
     title: job.title, employer: job.employer, source: job.source,
     url: job.sourceUrl, roleFamily: job.roleFamilies[0], discoveredAt: verifiedAt,
-    detailPageOpened: true, status: 'assessed', ...overrides,
+    detailPageOpened: true, status: 'assessed', employerExpansionRequired: false,
+    employerExpansionReason: 'The lead came from an employer inventory already inspected in this run', ...overrides,
   };
 }
 
@@ -107,8 +108,10 @@ function session(jobs = [activeJob()], overrides = {}) {
     searchCoverage: {
       searchFamilies: ['software test engineering', 'Java backend'],
       attempts: [
-        { roleFamily: 'software test engineering', source: 'Employer careers', query: 'software test intern Auckland', status: 'searched', leadsDiscovered: leads.length, detailPagesOpened: leads.length },
-        { roleFamily: 'Java backend', source: 'Public ATS', query: 'Java backend intern Auckland', status: 'searched', leadsDiscovered: 0, detailPagesOpened: 0 },
+        { roleFamily: 'software test engineering', strategy: 'broad-discovery', source: 'Web search', query: 'software testing intern Auckland', status: 'searched', leadsDiscovered: leads.length, detailPagesOpened: leads.length },
+        { roleFamily: 'software test engineering', strategy: 'source-inventory', source: 'Employer careers', query: 'Example Engineering current vacancies', status: 'searched', leadsDiscovered: leads.length, detailPagesOpened: leads.length },
+        { roleFamily: 'Java backend', strategy: 'broad-discovery', source: 'Web search', query: 'backend intern Auckland', status: 'searched', leadsDiscovered: 0, detailPagesOpened: 0 },
+        { roleFamily: 'Java backend', strategy: 'source-inventory', source: 'Public ATS', query: 'Auckland software internship vacancies', status: 'searched', leadsDiscovered: 0, detailPagesOpened: 0 },
       ],
     },
     leads,
@@ -160,12 +163,48 @@ test('derives partial coverage from attempts rather than accepting a claimed sta
     status: 'complete',
     searchFamilies: ['software testing', 'Java backend'],
     attempts: [
-      { roleFamily: 'software testing', source: 'Employer careers', query: 'test', status: 'searched' },
-      { roleFamily: 'Java backend', source: 'SEEK public page', query: 'java', status: 'blocked' },
+      { roleFamily: 'software testing', strategy: 'broad-discovery', source: 'Employer careers', query: 'test', status: 'searched' },
+      { roleFamily: 'software testing', strategy: 'source-inventory', source: 'Employer careers', query: 'test inventory', status: 'searched' },
+      { roleFamily: 'Java backend', strategy: 'source-inventory', source: 'SEEK public page', query: 'java', status: 'blocked' },
     ],
   }, []);
   assert.equal(result.status, 'partial');
   assert.deepEqual(result.unsearchedFamilies, ['Java backend']);
+});
+
+test('does not call one broad query per family complete coverage', () => {
+  const result = deriveSearchCoverage({
+    searchFamilies: ['software testing'],
+    attempts: [
+      { roleFamily: 'software testing', strategy: 'broad-discovery', source: 'Web search', query: 'software testing intern Auckland', status: 'searched' },
+    ],
+  }, []);
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(result.missingSourceInventoryFamilies, ['software testing']);
+});
+
+test('requires expansion of a relevant employer discovered outside its inventory', () => {
+  const lead = leadFor(activeJob(), {
+    employer: 'Aderant',
+    employerExpansionRequired: true,
+    employerExpansionReason: 'A related role was discovered on a public job board',
+  });
+  const coverage = {
+    searchFamilies: ['software test engineering'],
+    attempts: [
+      { roleFamily: 'software test engineering', strategy: 'broad-discovery', source: 'Web search', query: 'software testing intern Auckland', status: 'searched' },
+      { roleFamily: 'software test engineering', strategy: 'source-inventory', source: 'Public job board', query: 'Auckland testing internships', status: 'searched' },
+    ],
+  };
+  const missing = deriveSearchCoverage(coverage, [lead]);
+  assert.equal(missing.status, 'partial');
+  assert.deepEqual(missing.unexpandedEmployers, ['Aderant']);
+
+  coverage.attempts.push({
+    roleFamily: 'software test engineering', strategy: 'employer-expansion', employer: 'Aderant',
+    source: 'Employer careers', query: 'Aderant Auckland vacancies', status: 'searched',
+  });
+  assert.equal(deriveSearchCoverage(coverage, [lead]).status, 'complete');
 });
 
 test('separates high-value unverified leads from verified recommendations', () => {

@@ -126,6 +126,8 @@ export interface SearchAttempt {
   roleFamily: string;
   source: string;
   query: string;
+  strategy: 'broad-discovery' | 'source-inventory' | 'employer-expansion' | 'focused-follow-up';
+  employer?: string;
   status: 'searched' | 'discovery-only' | 'blocked' | 'unavailable' | 'skipped';
   leadsDiscovered?: number;
   detailPagesOpened?: number;
@@ -142,6 +144,8 @@ export interface SearchLead {
   discoveredAt: string;
   detailPageOpened: boolean;
   status: 'assessed' | 'duplicate' | 'blocked' | 'not-opened' | 'out-of-scope' | 'previously-reported';
+  employerExpansionRequired: boolean;
+  employerExpansionReason: string;
   reason?: string;
 }
 

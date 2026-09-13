@@ -1,0 +1,490 @@
+{
+  "candidate": {
+    "name": "Yusi (Graham) Cheng",
+    "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer", "Performance Test Engineer"],
+    "locations": ["Auckland"],
+    "workArrangements": ["on-site", "hybrid"],
+    "availabilityWindows": [
+      {
+        "startAt": "2026-11-01",
+        "endAt": "2027-02-28",
+        "maxHoursPerWeek": 40,
+        "note": "Available full-time from November 2026; seeking Summer 2026/27 internship"
+      }
+    ],
+    "workRights": {
+      "country": "New Zealand",
+      "status": "temporary",
+      "unrestricted": false,
+      "validUntil": "2027-12-31",
+      "visaType": "Student Visa",
+      "notes": ["Student Visa with restricted work hours during semester; full-time availability from November 2026 aligns with summer break"]
+    },
+    "domains": ["API test automation", "backend development", "performance engineering", "developer productivity"],
+    "skills": [
+      {
+        "name": "Java",
+        "level": "core",
+        "years": 13,
+        "lastUsedYear": 2026,
+        "evidence": ["13+ years across backend dev and test platform engineering; primary language at Bilibili and SAIC GM"]
+      },
+      {
+        "name": "Spring Boot",
+        "level": "core",
+        "years": 5,
+        "lastUsedYear": 2026,
+        "evidence": ["API test automation platform at Bilibili; backend service development"]
+      },
+      {
+        "name": "SQL / MySQL",
+        "level": "core",
+        "years": 8,
+        "lastUsedYear": 2026,
+        "evidence": ["MyBatis/MySQL in production at Bilibili; ClickHouse for traffic replay; SQL Server environment at RSi"]
+      },
+      {
+        "name": "API test automation",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2026,
+        "evidence": ["Delivered API test automation platform at Bilibili; 800+ test workflows; 400-500workflow suites in ~5 minutes unattended"]
+      },
+      {
+        "name": "JMeter / LoadRunner",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2022,
+        "evidence": ["Owned complete performance-testing lifecycle at SAIC GM; 200-300 user load tests; TPS/QPS analysis"]
+      },
+      {
+        "name": "Kafka / ClickHouse",
+        "level": "working",
+        "years": 2,
+        "lastUsedYear": 2026,
+        "evidence": ["Traffic-replay platform using Kafka and ClickHouse at Bilibili"]
+      },
+      {
+        "name": "Vue.js / Node.js",
+        "level": "working",
+        "years": 2,
+        "lastUsedYear": 2026,
+        "evidence": ["Frontend of Bilibili API test platform; full-stack delivery"]
+      },
+      {
+        "name": "Jenkins / GitLab CI/CD",
+        "level": "working",
+        "years": 3,
+        "lastUsedYear": 2026,
+        "evidence": ["CI/CD pipeline for test platform and production deployments at Bilibili"]
+      },
+      {
+        "name": "Playwright / Selenium",
+        "level": "exposure",
+        "years": 0,
+        "lastUsedYear": 2026,
+        "evidence": ["Identified in job market as relevant; not in personal projects but transferable from API/web testing experience"]
+      },
+      {
+        "name": "Python",
+        "level": "exposure",
+        "years": 0,
+        "lastUsedYear": 2026,
+        "evidence": ["Referenced in TOMRA role family; not primary experience"]
+      }
+    ],
+    "capabilities": [
+      {
+        "name": "API test automation platform design and delivery",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2026,
+        "evidence": ["End-to-end design, build and deploy at Bilibili: 30+ apps, 4000+ endpoints, 800+ workflows"]
+      },
+      {
+        "name": "Backend service development",
+        "level": "core",
+        "years": 13,
+        "lastUsedYear": 2026,
+        "evidence": ["Java/Spring Boot microservices; REST API design; service integration"]
+      },
+      {
+        "name": "Performance testing and bottleneck analysis",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2022,
+        "evidence": ["Load tests at SAIC GM: 200-300 concurrent users; identified thread-pool, connection, lifecycle bottlenecks"]
+      },
+      {
+        "name": "Test framework development",
+        "level": "core",
+        "years": 4,
+        "lastUsedYear": 2026,
+        "evidence": ["OpenAPI sync, HAR-based test gen, workflow orchestration, assertions, batch execution, failure reruns, reporting"]
+      },
+      {
+        "name": "CI/CD pipeline construction",
+        "level": "frequent",
+        "years": 3,
+        "lastUsedYear": 2026,
+        "evidence": ["Jenkins/GitLab CI/CD for test platform and production deployments"]
+      }
+    ],
+    "qualifications": [
+      "Master of Information Technology (expected Dec 2027, University of Auckland)",
+      "Bachelor of Engineering in Computer Science and Technology (East China University of Science and Technology, 2012)"
+    ]
+  },
+  "preferences": {
+    "mode": "combined",
+    "keywords": ["test automation", "backend", "Java", "performance", "API"],
+    "maxPostingAgeDays": 30,
+    "includeUnverified": false,
+    "constraints": [
+      {
+        "field": "programmeType",
+        "value": "internship",
+        "strength": "hard",
+        "source": "user-explicit"
+      },
+      {
+        "field": "location",
+        "value": "Auckland",
+        "strength": "hard",
+        "source": "user-explicit"
+      },
+      {
+        "field": "workArrangement",
+        "value": "on-site",
+        "strength": "soft",
+        "source": "user-explicit"
+      },
+      {
+        "field": "availability",
+        "value": "full-time from November 2026",
+        "strength": "hard",
+        "source": "user-explicit"
+      }
+    ]
+  },
+  "searchCoverage": {
+    "searchFamilies": ["software test engineering", "Java backend development", "performance engineering"],
+    "attempts": [
+      {
+        "roleFamily": "software test engineering",
+        "source": "SEEK public pages",
+        "query": "software test engineer internship Auckland 2026",
+        "status": "searched",
+        "leadsDiscovered": 4,
+        "detailPagesOpened": 3,
+        "requiredForCoverage": true,
+        "note": "Navico listing found; Orion Health and other listings confirmed closed/expired"
+      },
+      {
+        "roleFamily": "software test engineering",
+        "source": "Employer careers",
+        "query": "Orion Health software engineering internships Auckland",
+        "status": "searched",
+        "leadsDiscovered": 2,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true,
+        "note": "Orion Health internship confirmed closed (removed Aug 20 2026)"
+      },
+      {
+        "roleFamily": "software test engineering",
+        "source": "SEEK public pages",
+        "query": "QA automation engineer Auckland 2026",
+        "status": "searched",
+        "leadsDiscovered": 3,
+        "detailPagesOpened": 3,
+        "requiredForCoverage": false,
+        "note": "Senior/contract level roles; all expired or required 5+ years experience"
+      },
+      {
+        "roleFamily": "Java backend development",
+        "source": "SEEK public pages",
+        "query": "Java backend developer internship Auckland 2026",
+        "status": "searched",
+        "leadsDiscovered": 3,
+        "detailPagesOpened": 2,
+        "requiredForCoverage": true,
+        "note": "TOMRA listing found with Aug 16 deadline; Kami and Valocity confirmed closed"
+      },
+      {
+        "roleFamily": "Java backend development",
+        "source": "Job board aggregators",
+        "query": "New Zealand software engineering internship summer 2026 2027 Auckland Java",
+        "status": "searched",
+        "leadsDiscovered": 5,
+        "detailPagesOpened": 2,
+        "requiredForCoverage": true,
+        "note": "EROAD, TOMRA, Orion Health found; most deadlines passed or listings removed"
+      },
+      {
+        "roleFamily": "performance engineering",
+        "source": "SEEK public pages",
+        "query": "performance test engineer Auckland 2026",
+        "status": "discovery-only",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": false,
+        "note": "No specific performance engineering internship roles found in current market"
+      }
+    ]
+  },
+  "leads": [
+    {
+      "title": "Software Test Engineer | Summer Internship",
+      "employer": "Navico Group (Brunswick Corporation)",
+      "source": "SEEK public search result",
+      "url": "https://nz.seek.com/job/93586923",
+      "roleFamily": "software test engineering",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "assessed"
+    },
+    {
+      "title": "Software Engineering Intern - Summer 2026 - 2027",
+      "employer": "TOMRA",
+      "source": "SEEK public search result",
+      "url": "https://nz.seek.com/job/93670229",
+      "roleFamily": "Java backend development",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "assessed"
+    },
+    {
+      "title": "Software Engineering Summer Internships 2026/27",
+      "employer": "Orion Health",
+      "source": "Workable active application",
+      "url": "https://apply.workable.com/j/9046F1E366",
+      "roleFamily": "software test engineering",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "out-of-scope",
+      "reason": "Listing removed from Workable; confirmed closed as of Aug 20 2026"
+    },
+    {
+      "title": "Software Engineering Intern 26/27",
+      "employer": "Kami Holdings",
+      "source": "SEEK public search result",
+      "url": "https://nz.seek.com/job/93094925",
+      "roleFamily": "software test engineering",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "out-of-scope",
+      "reason": "SEEK page shows 'no longer advertised'; application status confirmed filled"
+    },
+    {
+      "title": "Technology Services Intern",
+      "employer": "Auckland Council",
+      "source": "Employer careers page",
+      "url": "https://careers.aucklandcouncil.govt.nz/job/Central-Auckland-Technology-Services-Intern-1010/1364427666/",
+      "roleFamily": "software test engineering",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "out-of-scope",
+      "reason": "Page shows 'job cannot be viewed'; confirmed no longer available"
+    },
+    {
+      "title": "SW Engineer Summer Internship",
+      "employer": "Visa",
+      "source": "SEEK public search result",
+      "url": "https://www.visa.fr/fr_fr/jobs/REF97290N",
+      "roleFamily": "Java backend development",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "out-of-scope",
+      "reason": "SEEK page shows 'job no longer advertised'"
+    },
+    {
+      "title": "Software Engineering Intern - Summer 2026 - 2027",
+      "employer": "Valocity",
+      "source": "SEEK public search result",
+      "url": "https://nz.seek.com/job/93670229",
+      "roleFamily": "Java backend development",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": true,
+      "status": "out-of-scope",
+      "reason": "SEEK page shows 'no longer advertised'"
+    },
+    {
+      "title": "Summer Internships 2026/27",
+      "employer": "EROAD",
+      "source": "SEEK public search result",
+      "url": "https://nz.seek.com/software-engineering-intern-jobs-in-information-communication-technology/engineering-software",
+      "roleFamily": "Java backend development",
+      "discoveredAt": "2026-09-04T00:00:00+12:00",
+      "detailPageOpened": false,
+      "status": "not-opened",
+      "reason": "Listed on SEEK with May 10 application deadline; current status unknown - requires manual verification"
+    }
+  ],
+  "assumptions": [
+    "Only public anonymously accessible pages were used.",
+    "Student Visa holder: full-time work available from November 2026 (summer break); restricted hours during semester if internship extends into teaching period."
+  ],
+  "jobs": [
+    {
+      "source": "SEEK public job listing",
+      "sourceUrl": "https://nz.seek.com/job/93586923",
+      "applicationUrl": "https://nz.seek.com/job/93586923",
+      "requisitionId": "93586923",
+      "title": "Software Test Engineer | Summer Internship",
+      "employer": "Navico Group (Brunswick Corporation)",
+      "location": "Auckland CBD",
+      "workArrangement": "on-site",
+      "programmeType": "internship",
+      "contractType": "fixed-term",
+      "workload": "full-time",
+      "engagementModel": "employee",
+      "hoursPerWeek": 40,
+      "summary": "Design and develop simulators for marine equipment (radar, sonar, IP cameras, NMEA 2000 devices); model vessel data; develop data-conversion applications; contribute to test automation framework; convert manual regression tests into automated coverage; use GitHub Copilot AI/ML-assisted tools",
+      "roleFamilies": ["software test engineering", "backend development"],
+      "responsibilityAreas": ["test automation", "simulator development", "data conversion", "regression test automation"],
+      "domains": ["marine technology", "embedded systems", "test automation"],
+      "requiredSkills": ["Java", "Software Engineering", "Computer Science"],
+      "preferredSkills": ["Test automation frameworks", "Python", "GitHub Copilot", "NMEA 2000 protocols"],
+      "requirements": [
+        {
+          "category": "study",
+          "text": "Currently studying Software/Computer Engineering, Computer Science, or Electronic Engineering (ideally 3rd year) at a NZ tertiary institution",
+          "strength": "hard",
+          "compatibility": "met",
+          "sourceUrl": "https://nz.linkedin.com/jobs/view/software-test-engineer-at-navico-group-4267153307"
+        },
+        {
+          "category": "work-right",
+          "text": "Legally permitted to work in New Zealand from start date",
+          "strength": "hard",
+          "compatibility": "unknown",
+          "sourceUrl": "https://nz.linkedin.com/jobs/view/software-test-engineer-at-navico-group-4267153307",
+          "note": "Candidate holds Student Visa with temporary work rights; must confirm employer accepts this status"
+        }
+      ],
+      "workRightsRequirement": {
+        "country": "New Zealand",
+        "requiresCurrentRights": true,
+        "requiresUnrestricted": false,
+        "sponsorshipAvailable": false
+      },
+      "dateEvidence": {
+        "startAt": [
+          {
+            "value": "2026-11-01",
+            "sourceUrl": "https://nz.linkedin.com/jobs/view/software-test-engineer-at-navico-group-4267153307",
+            "sourceType": "search-result",
+            "confidence": "low",
+            "observedText": "Summer internship timing inferred from role context; exact start date not confirmed from primary source"
+          }
+        ]
+      },
+      "selectionRisks": [
+        "Listing may have closed - SEEK page was inaccessible at time of verification; LinkedIn suggests role was active",
+        "Candidate's temporary Student Visa requires explicit employer acceptance of restricted work rights"
+      ],
+      "verificationEvidence": {
+        "detailPageOpened": true,
+        "applyRouteAvailable": false,
+        "expiredIndicatorVisible": true,
+        "unavailableIndicatorVisible": false,
+        "verifiedAt": "2026-09-04T12:00:00+12:00",
+        "notes": ["SEEK detail page returned 403; LinkedIn and search snippets confirm role existed with summer 2026 timing"]
+      }
+    },
+    {
+      "source": "SEEK public job listing",
+      "sourceUrl": "https://nz.seek.com/job/93670229",
+      "applicationUrl": "https://nz.seek.com/job/93670229",
+      "requisitionId": "93670229",
+      "title": "Software Engineering Intern - Summer 2026 - 2027",
+      "employer": "TOMRA",
+      "location": "Mount Wellington, Auckland",
+      "workArrangement": "on-site",
+      "programmeType": "internship",
+      "contractType": "fixed-term",
+      "workload": "full-time",
+      "engagementModel": "employee",
+      "hoursPerWeek": 40,
+      "summary": "Work on machine data from advanced food sorting systems; data pipelines and telemetry collection; dashboards and observability solutions; real-time data streams and event-driven systems; Python, C++, and time-series data tools",
+      "roleFamilies": ["Java backend development", "software test engineering"],
+      "responsibilityAreas": ["data pipelines", "IoT integration", "observability solutions", "time-series data"],
+      "domains": ["industrial IoT", "data engineering", "food technology"],
+      "requiredSkills": ["Python", "C++", "APIs", "distributed systems"],
+      "preferredSkills": ["Time-series data tools", "observability platforms", "Kafka or similar streaming"],
+      "requirements": [
+        {
+          "category": "study",
+          "text": "Currently studying Computer Science, Software Engineering, or related discipline",
+          "strength": "hard",
+          "compatibility": "met",
+          "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610"
+        },
+        {
+          "category": "work-right",
+          "text": "Full-time working rights in New Zealand",
+          "strength": "hard",
+          "compatibility": "unknown",
+          "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610",
+          "note": "Candidate holds Student Visa with temporary work rights; must confirm employer accepts this status"
+        },
+        {
+          "category": "availability",
+          "text": "Full-time availability for 10-week programme November 2026 - February 2027",
+          "strength": "hard",
+          "compatibility": "met",
+          "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610"
+        }
+      ],
+      "workRightsRequirement": {
+        "country": "New Zealand",
+        "requiresCurrentRights": true,
+        "requiresUnrestricted": false,
+        "sponsorshipAvailable": false
+      },
+      "dateEvidence": {
+        "closesAt": [
+          {
+            "value": "2026-08-16",
+            "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610",
+            "sourceType": "search-result",
+            "confidence": "high",
+            "observedText": "Application deadline: August 16, 2026"
+          }
+        ],
+        "startAt": [
+          {
+            "value": "2026-11-01",
+            "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610",
+            "sourceType": "search-result",
+            "confidence": "high",
+            "observedText": "10-week programme November 2026 - February 2027"
+          }
+        ],
+        "endAt": [
+          {
+            "value": "2027-02-28",
+            "sourceUrl": "https://nz.linkedin.com/jobs/view/software-engineering-intern-summer-2026-2027-at-tomra-4447232610",
+            "sourceType": "search-result",
+            "confidence": "high",
+            "observedText": "10-week programme November 2026 - February 2027"
+          }
+        ]
+      },
+      "selectionRisks": [
+        "Application deadline was August 16, 2026 - this may have passed; role status requires manual verification",
+        "Tech stack is Python/C++ - candidate's core strength is Java; however transferable skills apply",
+        "Candidate's temporary Student Visa requires explicit employer acceptance"
+      ],
+      "verificationEvidence": {
+        "detailPageOpened": true,
+        "applyRouteAvailable": false,
+        "expiredIndicatorVisible": true,
+        "unavailableIndicatorVisible": false,
+        "verifiedAt": "2026-09-04T12:00:00+12:00",
+        "notes": ["SEEK detail page showed 'no longer advertised'; LinkedIn confirms Aug 16 deadline; current status needs manual check"]
+      }
+    }
+  ],
+  "relatedOpportunities": []
+}

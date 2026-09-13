@@ -43,6 +43,7 @@
     "attempts": [
       {
         "roleFamily": "software test engineering",
+        "strategy": "broad-discovery",
         "source": "Employer careers site",
         "query": "software test engineer internship Auckland",
         "status": "searched",
@@ -52,7 +53,19 @@
         "note": "Example public-page verification"
       },
       {
+        "roleFamily": "software test engineering",
+        "strategy": "source-inventory",
+        "source": "Employer careers site",
+        "query": "Example Engineering current vacancies",
+        "status": "searched",
+        "leadsDiscovered": 1,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true,
+        "note": "Employer vacancy inventory inspected"
+      },
+      {
         "roleFamily": "Java backend",
+        "strategy": "broad-discovery",
         "source": "Public ATS pages",
         "query": "Java backend internship Auckland",
         "status": "searched",
@@ -60,6 +73,17 @@
         "detailPagesOpened": 0,
         "requiredForCoverage": true,
         "note": "Example public ATS search"
+      },
+      {
+        "roleFamily": "Java backend",
+        "strategy": "source-inventory",
+        "source": "Public ATS pages",
+        "query": "Auckland software internship vacancies",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true,
+        "note": "Example public ATS inventory"
       }
     ]
   },
@@ -72,7 +96,9 @@
       "roleFamily": "software test engineering",
       "discoveredAt": "2026-09-01T09:00:00+12:00",
       "detailPageOpened": true,
-      "status": "assessed"
+      "status": "assessed",
+      "employerExpansionRequired": false,
+      "employerExpansionReason": "The employer careers inventory was already inspected in this run"
     }
   ],
   "assumptions": ["This file is illustrative; its employer and vacancy are fictional."],

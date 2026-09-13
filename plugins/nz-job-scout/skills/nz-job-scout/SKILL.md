@@ -64,22 +64,35 @@ Classify skills and capabilities as `core`, `frequent`, `working`, or `exposure`
 
 In `criteria` mode, create the neutral candidate object defined in the reference. Do not imply that a CV or personal fit was assessed.
 
-## Search and audit trail
+## Search planning and discovery
 
-In profile or combined mode, derive several materially distinct role families from sustained recent work. Search each family with New Zealand title variants; finding one vacancy is not a stopping condition. In criteria mode, preserve explicit scope.
+In profile or combined mode, derive a small set of materially distinct responsibility families from sustained recent work. In criteria mode, preserve explicit scope. Do not attempt a Cartesian product of titles, technologies, seniority terms, locations, and employment types. Search for high recall first, then use duties and experience depth to rank the collected vacancies.
 
-For every search operation, record a `searchCoverage.attempts[]` entry with its role family, source, exact query, result status, discovered-lead count, opened-detail count, and limitation note. Record every discovered lead in `leads[]`, including duplicates, inaccessible pages, out-of-scope results, and leads that were never opened. This creates an auditable funnel:
+For every intended family, complete both discovery routes:
+
+1. `broad-discovery`: use a deliberately broad role/stage/location query. Avoid adding a specific technology unless the user made it mandatory. For example, prefer `software testing intern Auckland` over a narrow stack phrase such as `Java API test automation internship Auckland`.
+2. `source-inventory`: inspect a public collection of vacancies, such as a location/category result page, an employer careers listing, an ATS board/feed, or a public sitemap. Capture every plausibly relevant lead visible in the inspected collection before filtering it by CV fit.
+
+Use `focused-follow-up` only to close a demonstrated gap; it is not a requirement to enumerate every possible job title. Deduplicate after discovery, not by narrowing discovery queries.
+
+Whenever a lead reveals an employer operating in an intended responsibility family, decide whether the employer inventory needs expansion. Set `employerExpansionRequired: true` when the employer was discovered through a board, search result, inaccessible detail page, closed role, senior role, permanent role, or another listing that does not establish that the employer's current vacancy inventory was inspected. Then perform one `employer-expansion` attempt covering that employer's public careers/ATS inventory or a broad employer-and-location vacancy search. A specific role being unsuitable is not a reason to skip the employer expansion. Set the flag to `false` only when the lead itself came from an already-inspected employer/ATS inventory or the employer is demonstrably outside the requested responsibility families, and record the reason.
+
+Continue discovery adaptively. After both required routes are attempted for a family, stop optional reformulation when two consecutive `focused-follow-up` operations produce no new canonical vacancy identities. Finding one vacancy is never a stopping condition. A blocked source makes coverage partial; it does not justify repeated retries or bypassing access controls.
+
+## Search audit trail
+
+For every search operation, record a `searchCoverage.attempts[]` entry with its role family, strategy, source, exact query, result status, discovered-lead count, opened-detail count, optional employer, and limitation note. Record every discovered lead in `leads[]`, including duplicates, inaccessible pages, out-of-scope results, and leads that were never opened. Each lead must record the employer-expansion decision and reason. This creates an auditable funnel:
 
 `query -> discovered lead -> opened detail page -> assessed listing -> recommendation/rejection`
 
-Do not set coverage status manually. The runtime derives `complete`, `partial`, or `blocked` from the attempts:
+Do not set coverage status manually. The runtime derives `complete`, `partial`, or `blocked` from the attempts. Complete coverage requires, for every family, a successful `broad-discovery` attempt, a successful `source-inventory` attempt, and a successful `employer-expansion` attempt for every lead marked as requiring it:
 
-- `searched`: primary results were inspected;
+- `searched`: the intended discovery result set or public inventory was inspected;
 - `discovery-only`: leads were visible but primary details could not be verified;
 - `blocked` or `unavailable`: access failed;
 - `skipped`: deliberately not searched, with a reason.
 
-After two consecutive empty operations for the same family/source approach, stop reformulating it and record the limitation.
+Do not describe a run as complete merely because each family has one generic `searched` attempt.
 
 ### Structured public evidence
 

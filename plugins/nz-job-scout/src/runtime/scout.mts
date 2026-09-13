@@ -174,9 +174,22 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
   const searched = attempts.filter((attempt) => attempt.status === 'searched');
   const materialFailures = attempts.filter((attempt) =>
     attempt.requiredForCoverage !== false && ['blocked', 'unavailable', 'discovery-only'].includes(attempt.status));
+  const successfulFamilyStrategy = (family, strategy) => searched.some((attempt) =>
+    normalise(attempt.roleFamily) === normalise(family) && attempt.strategy === strategy);
+  const missingBroadDiscoveryFamilies = families.filter((family) =>
+    !successfulFamilyStrategy(family, 'broad-discovery'));
+  const missingSourceInventoryFamilies = families.filter((family) =>
+    !successfulFamilyStrategy(family, 'source-inventory'));
   const unsearchedFamilies = families.filter((family) =>
-    !searched.some((attempt) => normalise(attempt.roleFamily) === normalise(family)));
-  const status = searched.length === 0 ? 'blocked' : materialFailures.length || unsearchedFamilies.length ? 'partial' : 'complete';
+    missingBroadDiscoveryFamilies.includes(family) && missingSourceInventoryFamilies.includes(family));
+  const requiredEmployers = [...new Set(asArray(leads)
+    .filter((lead) => lead.employerExpansionRequired === true)
+    .map((lead) => asText(lead.employer))
+    .filter(Boolean))];
+  const unexpandedEmployers = requiredEmployers.filter((employer) => !searched.some((attempt) =>
+    attempt.strategy === 'employer-expansion' && normalise(attempt.employer) === normalise(employer)));
+  const incompletePlan = missingBroadDiscoveryFamilies.length || missingSourceInventoryFamilies.length || unexpandedEmployers.length;
+  const status = searched.length === 0 ? 'blocked' : materialFailures.length || incompletePlan ? 'partial' : 'complete';
   const leadList = asArray(leads);
   return {
     status,
@@ -186,6 +199,9 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
     detailPagesOpened: leadList.filter((lead) => lead.detailPageOpened === true).length,
     attempts,
     unsearchedFamilies,
+    missingBroadDiscoveryFamilies,
+    missingSourceInventoryFamilies,
+    unexpandedEmployers,
   };
 }
 
@@ -211,11 +227,14 @@ export function validateSession(session) {
     if (!Array.isArray(session.searchCoverage.searchFamilies) || !session.searchCoverage.searchFamilies.length) errors.push('searchCoverage.searchFamilies must contain at least one role family');
     if (!Array.isArray(session.searchCoverage.attempts) || !session.searchCoverage.attempts.length) errors.push('searchCoverage.attempts must contain each search attempt');
     const statuses = new Set(['searched', 'discovery-only', 'blocked', 'unavailable', 'skipped']);
+    const strategies = new Set(['broad-discovery', 'source-inventory', 'employer-expansion', 'focused-follow-up']);
     asArray(session.searchCoverage.attempts).forEach((attempt, index) => {
       requiredString(attempt?.roleFamily, `searchCoverage.attempts[${index}].roleFamily`, errors);
       requiredString(attempt?.source, `searchCoverage.attempts[${index}].source`, errors);
       requiredString(attempt?.query, `searchCoverage.attempts[${index}].query`, errors);
       if (!statuses.has(attempt?.status)) errors.push(`searchCoverage.attempts[${index}].status is invalid`);
+      if (!strategies.has(attempt?.strategy)) errors.push(`searchCoverage.attempts[${index}].strategy is invalid`);
+      if (attempt?.strategy === 'employer-expansion') requiredString(attempt?.employer, `searchCoverage.attempts[${index}].employer`, errors);
     });
   }
 
@@ -223,6 +242,8 @@ export function validateSession(session) {
   asArray(session.leads).forEach((lead, index) => {
     for (const field of ['title', 'employer', 'source', 'url', 'roleFamily', 'discoveredAt']) requiredString(lead?.[field], `leads[${index}].${field}`, errors);
     if (!leadStatuses.has(lead?.status)) errors.push(`leads[${index}].status is invalid`);
+    if (typeof lead?.employerExpansionRequired !== 'boolean') errors.push(`leads[${index}].employerExpansionRequired must be boolean`);
+    requiredString(lead?.employerExpansionReason, `leads[${index}].employerExpansionReason`, errors);
     if (lead?.status !== 'assessed' && !asText(lead?.reason)) errors.push(`leads[${index}].reason is required when status is ${lead?.status}`);
   });
 
@@ -642,8 +663,12 @@ export function renderMarkdown(report) {
     `- Queries run: ${coverage.queriesRun}`, `- Lead outcomes: ${leadBreakdown(report.leads)}`,
     `- Previously reported unchanged listings excluded: ${report.excludedPreviouslyReported}`,
     `- Listings with changed evidence included: ${report.updatedListingsCount}`, `- Search coverage: ${coverage.status}`, '',
-    '### Search attempts', '', '| Role family | Source | Status | Query | Leads | Detail pages |', '|---|---|---|---|---:|---:|',
-    ...coverage.attempts.map((attempt) => `| ${escapeCell(attempt.roleFamily)} | ${escapeCell(attempt.source)} | ${attempt.status} | ${escapeCell(attempt.query)} | ${Number(attempt.leadsDiscovered ?? 0)} | ${Number(attempt.detailPagesOpened ?? 0)} |`), '',
+    '### Search attempts', '', '| Role family | Strategy | Source | Status | Query | Leads | Detail pages |', '|---|---|---|---|---|---:|---:|',
+    ...coverage.attempts.map((attempt) => `| ${escapeCell(attempt.roleFamily)} | ${attempt.strategy} | ${escapeCell(attempt.source)} | ${attempt.status} | ${escapeCell(attempt.query)} | ${Number(attempt.leadsDiscovered ?? 0)} | ${Number(attempt.detailPagesOpened ?? 0)} |`), '',
+    '### Discovery-plan gaps', '',
+    `- Families missing broad discovery: ${coverage.missingBroadDiscoveryFamilies.join(', ') || 'none'}`,
+    `- Families missing source inventory: ${coverage.missingSourceInventoryFamilies.join(', ') || 'none'}`,
+    `- Employers awaiting expansion: ${coverage.unexpandedEmployers.join(', ') || 'none'}`, '',
     '### Source coverage', '', ...sourceCoverage(coverage.attempts), '', '### Assumptions', '', bulletList(report.assumptions), '', '## Verified recommendations', '',
   ];
   if (coverage.status !== 'complete') lines.push('> Search coverage was incomplete. Results describe only the public sources accessible in this run; additional suitable vacancies may exist.', '');
