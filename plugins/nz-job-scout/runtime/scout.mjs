@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+export const PLUGIN_VERSION = '0.6.0';
+export const SESSION_SCHEMA_VERSION = 3;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
 const CONCEPT_GROUPS = [
@@ -17,6 +19,7 @@ const CONCEPT_GROUPS = [
     ['performance testing', 'load testing', 'performance engineering'],
     ['full stack development', 'web application development', 'frontend and backend development'],
     ['debugging', 'troubleshooting', 'root cause analysis', 'production support'],
+    ['technology services', 'digital services', 'ict services', 'it support', 'technical support', 'systems support', 'application support', 'service management', 'it operations', 'software support'],
     ['sql', 'relational databases', 'database development'],
     ['ci cd', 'continuous integration', 'continuous delivery', 'jenkins'],
     ['api', 'rest api', 'http api', 'web service'],
@@ -27,9 +30,14 @@ const GENERIC_ROLE_TOKENS = new Set([
 ]);
 const BLOCKED_AGGREGATORS = [
     'bebee.', 'ziprecruiter.', 'thebigjobsite.', 'joblum.', 'broxer.', 'jooble.',
+    'builtin.', 'career.now', 'jobleads.', 'expertini.', 'jobspace.', 'jora.',
+    'omnijobs.', 'alion.io', 'hiringcafe.', 'freehire.',
 ];
+const DISCOVERY_ONLY_HOSTS = ['seek.', 'linkedin.', 'indeed.'];
 const DAILY_REPORT_PATTERN = /^nz-jobs-(\d{4}-\d{2}-\d{2})\.md$/;
 const ITEM_MARKER = /<!-- nz-job-scout:item (\{.+?\}) -->/g;
+const STATE_FILE_NAME = '.nz-job-scout-state.json';
+const UNSUPPORTED_WORK_RIGHTS_ASSUMPTION = /\b(unrestricted work rights?|post[- ]graduation(?: work)? rights?|post[- ]study work rights?)\b/i;
 const asText = (value) => String(value ?? '').trim();
 const asArray = (value) => Array.isArray(value) ? value : [];
 const clamp = (value, min = 0, max = 10) => Math.max(min, Math.min(max, value));
@@ -100,6 +108,23 @@ function canonicalJson(value) {
 }
 function fingerprint(value) {
     return createHash('sha256').update(canonicalJson(value)).digest('hex').slice(0, 20);
+}
+function hostMatches(value, domains) {
+    try {
+        return domains.some((domain) => new URL(value).hostname.toLowerCase().includes(domain));
+    }
+    catch {
+        return false;
+    }
+}
+function sameRole(left, right) {
+    return normalise(left?.employer) === normalise(right?.employer)
+        && normalise(left?.title) === normalise(right?.title);
+}
+function leadMatchesJob(lead, job) {
+    const leadUrl = normaliseUrl(lead?.url);
+    return Boolean(leadUrl && [normaliseUrl(job?.sourceUrl), normaliseUrl(job?.applicationUrl)].includes(leadUrl))
+        || sameRole(lead, job);
 }
 function dateObservations(job, field) {
     const recorded = asArray(job.dateEvidence?.[field]);
@@ -173,6 +198,9 @@ function validateDateEvidence(job, index, errors) {
 export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
     const attempts = asArray(searchCoverage.attempts);
     const families = asArray(searchCoverage.searchFamilies);
+    const sourceTargets = asArray(searchCoverage.sourceTargets);
+    const explicitFamilies = asArray(searchCoverage.explicitSearchFamilies);
+    const programmeFirstRequired = searchCoverage.programmeFirstRequired === true;
     const searched = attempts.filter((attempt) => attempt.status === 'searched');
     const materialFailures = attempts.filter((attempt) => attempt.requiredForCoverage !== false && ['blocked', 'unavailable', 'discovery-only'].includes(attempt.status));
     const successfulFamilyStrategy = (family, strategy) => searched.some((attempt) => normalise(attempt.roleFamily) === normalise(family) && attempt.strategy === strategy);
@@ -184,7 +212,15 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
             .map((lead) => asText(lead.employer))
             .filter(Boolean))];
     const unexpandedEmployers = requiredEmployers.filter((employer) => !searched.some((attempt) => attempt.strategy === 'employer-expansion' && normalise(attempt.employer) === normalise(employer)));
-    const incompletePlan = missingBroadDiscoveryFamilies.length || missingSourceInventoryFamilies.length || unexpandedEmployers.length;
+    const missingRequiredSourceTargets = sourceTargets
+        .filter((target) => target.requiredForCoverage !== false && target.status !== 'searched')
+        .map((target) => asText(target.name))
+        .filter(Boolean);
+    const missingExplicitFamilies = explicitFamilies.filter((explicitFamily) => !families.some((family) => normalise(family) === normalise(explicitFamily)));
+    const missingProgrammeDiscovery = programmeFirstRequired && !searched.some((attempt) => attempt.strategy === 'programme-discovery');
+    const missingProgrammeInventory = programmeFirstRequired && !sourceTargets.some((target) => target.purpose === 'programme-inventory' && target.status === 'searched');
+    const incompletePlan = missingBroadDiscoveryFamilies.length || missingSourceInventoryFamilies.length || unexpandedEmployers.length
+        || missingRequiredSourceTargets.length || missingExplicitFamilies.length || missingProgrammeDiscovery || missingProgrammeInventory;
     const status = searched.length === 0 ? 'blocked' : materialFailures.length || incompletePlan ? 'partial' : 'complete';
     const leadList = asArray(leads);
     return {
@@ -198,12 +234,23 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
         missingBroadDiscoveryFamilies,
         missingSourceInventoryFamilies,
         unexpandedEmployers,
+        sourceTargets,
+        missingRequiredSourceTargets,
+        explicitSearchFamilies: explicitFamilies,
+        missingExplicitFamilies,
+        programmeFirstRequired,
+        missingProgrammeDiscovery,
+        missingProgrammeInventory,
     };
 }
 export function validateSession(session) {
     const errors = [];
     if (!session || typeof session !== 'object' || Array.isArray(session))
         return { valid: false, errors: ['session must be a JSON object'] };
+    if (session.pluginVersion !== PLUGIN_VERSION)
+        errors.push(`pluginVersion must be ${PLUGIN_VERSION}`);
+    if (session.sessionSchemaVersion !== SESSION_SCHEMA_VERSION)
+        errors.push(`sessionSchemaVersion must be ${SESSION_SCHEMA_VERSION}`);
     if (!session.candidate || typeof session.candidate !== 'object')
         errors.push('candidate is required');
     if (!session.preferences || typeof session.preferences !== 'object')
@@ -233,8 +280,19 @@ export function validateSession(session) {
             errors.push('searchCoverage.searchFamilies must contain at least one role family');
         if (!Array.isArray(session.searchCoverage.attempts) || !session.searchCoverage.attempts.length)
             errors.push('searchCoverage.attempts must contain each search attempt');
+        if (!Array.isArray(session.searchCoverage.explicitSearchFamilies))
+            errors.push('searchCoverage.explicitSearchFamilies must be an array');
+        if (typeof session.searchCoverage.programmeFirstRequired !== 'boolean')
+            errors.push('searchCoverage.programmeFirstRequired must be boolean');
+        if (!Array.isArray(session.searchCoverage.sourceTargets) || !session.searchCoverage.sourceTargets.length)
+            errors.push('searchCoverage.sourceTargets must contain the planned public sources');
+        const familyNames = asArray(session.searchCoverage.searchFamilies).map(normalise);
+        asArray(session.searchCoverage.explicitSearchFamilies).forEach((family) => {
+            if (!familyNames.includes(normalise(family)))
+                errors.push(`Explicit search family is missing from searchFamilies: ${family}`);
+        });
         const statuses = new Set(['searched', 'discovery-only', 'blocked', 'unavailable', 'skipped']);
-        const strategies = new Set(['broad-discovery', 'source-inventory', 'employer-expansion', 'focused-follow-up']);
+        const strategies = new Set(['programme-discovery', 'broad-discovery', 'source-inventory', 'employer-expansion', 'focused-follow-up']);
         asArray(session.searchCoverage.attempts).forEach((attempt, index) => {
             requiredString(attempt?.roleFamily, `searchCoverage.attempts[${index}].roleFamily`, errors);
             requiredString(attempt?.source, `searchCoverage.attempts[${index}].source`, errors);
@@ -246,18 +304,86 @@ export function validateSession(session) {
             if (attempt?.strategy === 'employer-expansion')
                 requiredString(attempt?.employer, `searchCoverage.attempts[${index}].employer`, errors);
         });
+        const targetPurposes = new Set(['board-discovery', 'programme-inventory', 'employer-ats', 'technical-volunteer']);
+        const inventoryScopes = new Set(['listing-page', 'ats-board', 'search-results', 'single-detail', 'event-page']);
+        asArray(session.searchCoverage.sourceTargets).forEach((target, index) => {
+            requiredString(target?.name, `searchCoverage.sourceTargets[${index}].name`, errors);
+            requiredString(target?.url, `searchCoverage.sourceTargets[${index}].url`, errors);
+            if (target?.url) {
+                try {
+                    new URL(target.url);
+                }
+                catch {
+                    errors.push(`searchCoverage.sourceTargets[${index}].url must be an absolute URL`);
+                }
+            }
+            if (!Number.isInteger(target?.itemsInspected) || target.itemsInspected < 0)
+                errors.push(`searchCoverage.sourceTargets[${index}].itemsInspected must be a non-negative integer`);
+            if (!Array.isArray(target?.itemUrls))
+                errors.push(`searchCoverage.sourceTargets[${index}].itemUrls must be an array`);
+            else {
+                if (target.itemsInspected !== target.itemUrls.length)
+                    errors.push(`searchCoverage.sourceTargets[${index}].itemsInspected must equal itemUrls.length`);
+                target.itemUrls.forEach((itemUrl, itemIndex) => {
+                    try {
+                        new URL(itemUrl);
+                    }
+                    catch {
+                        errors.push(`searchCoverage.sourceTargets[${index}].itemUrls[${itemIndex}] must be an absolute URL`);
+                    }
+                });
+            }
+            if (!inventoryScopes.has(target?.inventoryScope))
+                errors.push(`searchCoverage.sourceTargets[${index}].inventoryScope is invalid`);
+            if (!targetPurposes.has(target?.purpose))
+                errors.push(`searchCoverage.sourceTargets[${index}].purpose is invalid`);
+            if (!statuses.has(target?.status))
+                errors.push(`searchCoverage.sourceTargets[${index}].status is invalid`);
+            if (target?.purpose === 'programme-inventory' && ['single-detail', 'event-page'].includes(target?.inventoryScope)) {
+                errors.push(`searchCoverage.sourceTargets[${index}] cannot use a ${target.inventoryScope} as a programme inventory`);
+            }
+            if (target?.purpose === 'employer-ats') {
+                requiredString(target?.employer, `searchCoverage.sourceTargets[${index}].employer`, errors);
+                if (!['listing-page', 'ats-board'].includes(target?.inventoryScope))
+                    errors.push(`searchCoverage.sourceTargets[${index}] employer-ats must be a listing-page or ats-board`);
+                if (hostMatches(target?.url, [...BLOCKED_AGGREGATORS, ...DISCOVERY_ONLY_HOSTS]))
+                    errors.push(`searchCoverage.sourceTargets[${index}] employer-ats must use a public employer or ATS inventory, not a discovery or aggregator host`);
+            }
+        });
+        const plannedPurposes = new Set(asArray(session.searchCoverage.sourceTargets).map((target) => target.purpose));
+        for (const purpose of ['board-discovery', 'employer-ats']) {
+            if (!plannedPurposes.has(purpose))
+                errors.push(`searchCoverage.sourceTargets needs ${purpose === 'employer-ats' ? 'an' : 'a'} ${purpose} target`);
+        }
+        if (session.preferences?.includeTechnicalVolunteer === true && !plannedPurposes.has('technical-volunteer'))
+            errors.push('Technical volunteer searches need a technical-volunteer source target');
+        if (session.searchCoverage.programmeFirstRequired === true) {
+            if (!asArray(session.searchCoverage.attempts).some((attempt) => attempt.strategy === 'programme-discovery'))
+                errors.push('programmeFirstRequired needs a programme-discovery attempt');
+            if (!asArray(session.searchCoverage.sourceTargets).some((target) => target.purpose === 'programme-inventory'))
+                errors.push('programmeFirstRequired needs a programme-inventory source target');
+        }
     }
     const leadStatuses = new Set(['assessed', 'duplicate', 'blocked', 'not-opened', 'out-of-scope', 'previously-reported']);
+    const leadPriorities = new Set(['high', 'normal', 'low']);
+    const directSourceStatuses = new Set(['found', 'not-found', 'not-checked']);
     asArray(session.leads).forEach((lead, index) => {
         for (const field of ['title', 'employer', 'source', 'url', 'roleFamily', 'discoveredAt'])
             requiredString(lead?.[field], `leads[${index}].${field}`, errors);
         if (!leadStatuses.has(lead?.status))
             errors.push(`leads[${index}].status is invalid`);
+        if (!leadPriorities.has(lead?.priority))
+            errors.push(`leads[${index}].priority is invalid`);
+        if (!directSourceStatuses.has(lead?.directSourceStatus))
+            errors.push(`leads[${index}].directSourceStatus is invalid`);
         if (typeof lead?.employerExpansionRequired !== 'boolean')
             errors.push(`leads[${index}].employerExpansionRequired must be boolean`);
         requiredString(lead?.employerExpansionReason, `leads[${index}].employerExpansionReason`, errors);
         if (lead?.status !== 'assessed' && !asText(lead?.reason))
             errors.push(`leads[${index}].reason is required when status is ${lead?.status}`);
+        if (lead?.status === 'assessed' && !asArray(session.jobs).some((job) => leadMatchesJob(lead, job))) {
+            errors.push(`leads[${index}] is assessed but has no matching jobs[] evidence record`);
+        }
     });
     if (session.candidate) {
         for (const field of ['targetRoleFamilies', 'locations', 'workArrangements', 'domains', 'qualifications']) {
@@ -291,6 +417,12 @@ export function validateSession(session) {
                 errors.push('candidate.workRights.status is invalid');
             if (typeof session.candidate.workRights.unrestricted !== 'boolean')
                 errors.push('candidate.workRights.unrestricted must be boolean');
+            if (!['user-explicit', 'resume', 'official-document', 'unknown'].includes(session.candidate.workRights.evidenceSource))
+                errors.push('candidate.workRights.evidenceSource is invalid');
+            if (session.candidate.workRights.unrestricted === true && session.candidate.workRights.status !== 'unrestricted')
+                errors.push('candidate.workRights.unrestricted can be true only when status is unrestricted');
+            if (session.candidate.workRights.unrestricted === true && session.candidate.workRights.evidenceSource === 'unknown')
+                errors.push('unrestricted work rights require user, resume, or official-document evidence');
         }
         for (const [field, values] of [['skills', session.candidate.skills], ['capabilities', session.candidate.capabilities]]) {
             asArray(values).forEach((item, index) => {
@@ -316,6 +448,10 @@ export function validateSession(session) {
             errors.push(`jobs[${index}].contractType is invalid`);
         if (!['full-time', 'part-time', 'variable', 'not-stated'].includes(job?.workload))
             errors.push(`jobs[${index}].workload is invalid`);
+        if (job?.isTechnicalVolunteer !== undefined && typeof job.isTechnicalVolunteer !== 'boolean')
+            errors.push(`jobs[${index}].isTechnicalVolunteer must be boolean`);
+        if (job?.compensation && !['paid', 'unpaid', 'reimbursed', 'unknown'].includes(job.compensation.kind))
+            errors.push(`jobs[${index}].compensation.kind is invalid`);
         if (!Array.isArray(job?.roleFamilies) || !job.roleFamilies.length)
             errors.push(`jobs[${index}].roleFamilies must contain at least one duty-derived family`);
         if (!Array.isArray(job?.responsibilityAreas) || !job.responsibilityAreas.length)
@@ -339,6 +475,26 @@ export function validateSession(session) {
         });
         validateDateEvidence(job, index, errors);
     });
+    const urlOwners = new Map();
+    asArray(session.jobs).forEach((job, index) => {
+        for (const rawUrl of [job?.sourceUrl, job?.applicationUrl]) {
+            const url = normaliseUrl(rawUrl);
+            if (!url)
+                continue;
+            const owner = urlOwners.get(url);
+            if (owner && !sameRole(owner.job, job)) {
+                errors.push(`jobs[${index}] reuses ${url} for a different employer/title than jobs[${owner.index}]`);
+            }
+            else if (!owner)
+                urlOwners.set(url, { job, index });
+        }
+    });
+    if (session.candidate?.workRights?.unrestricted !== true) {
+        asArray(session.assumptions).forEach((assumption, index) => {
+            if (UNSUPPORTED_WORK_RIGHTS_ASSUMPTION.test(asText(assumption)))
+                errors.push(`assumptions[${index}] claims unrestricted or post-study work rights without explicit evidence`);
+        });
+    }
     asArray(session.relatedOpportunities).forEach((item, index) => {
         for (const field of ['kind', 'title', 'organisation', 'url', 'registrationStatus'])
             requiredString(item?.[field], `relatedOpportunities[${index}].${field}`, errors);
@@ -413,7 +569,7 @@ export function scoreRoleFit(candidate, job, now = new Date()) {
     const requiredScore = average(requiredMatches, 0.55);
     const preferredScore = average(preferredMatches, requiredScore);
     const responsibilityScore = average(responsibilityMatches, 0.45);
-    const score = requiredScore * 4 + preferredScore + responsibilityScore * 3.5
+    const rawScore = requiredScore * 4 + preferredScore + responsibilityScore * 3.5
         + bestSemanticMatch(job.roleFamilies, candidate.targetRoleFamilies)
         + bestSemanticMatch(job.domains, candidate.domains) * 0.5;
     const evidence = [...requiredMatches, ...responsibilityMatches].filter((item) => item.match)
@@ -421,7 +577,10 @@ export function scoreRoleFit(candidate, job, now = new Date()) {
     const gaps = requiredMatches.filter((item) => !item.match).map((item) => item.name);
     if (!required.length)
         gaps.push('No concrete required technologies were stated; score relies on responsibilities and transferable capabilities');
-    return { score: round1(clamp(score)), evidence: [...new Set(evidence)], gaps };
+    const noRequiredSkillMatches = required.length > 0 && requiredMatches.every((item) => !item.match);
+    if (noRequiredSkillMatches)
+        gaps.push('No stated required technology is supported by the candidate evidence; role fit is capped below the stretch threshold');
+    return { score: round1(clamp(noRequiredSkillMatches ? Math.min(rawScore, 2.9) : rawScore)), evidence: [...new Set(evidence)], gaps };
 }
 function scoreCriteriaRole(job, candidate, preferences) {
     const requested = asArray(preferences.constraints).filter((item) => ['keyword', 'roleFamily'].includes(item.field)).map((item) => item.value);
@@ -507,8 +666,28 @@ export function scorePracticalFit(candidate, preferences, job) {
     const positives = [];
     const cautions = [];
     let score = 0;
-    if (job.engagementModel && normalise(job.engagementModel) !== 'employee')
+    const volunteerRequested = preferences.includeTechnicalVolunteer === true
+        || constraintsFor(preferences, 'engagementModel').some((item) => normalise(item.value) === 'volunteer');
+    const volunteerRole = normalise(job.engagementModel) === 'volunteer' || job.isTechnicalVolunteer === true;
+    if (volunteerRole) {
+        if (!volunteerRequested)
+            blockers.push('Technical volunteer work was not requested for this search');
+        else if (job.isTechnicalVolunteer !== true)
+            blockers.push('Volunteer role is not evidenced as having explicit technical software work');
+        else {
+            positives.push('Explicitly requested technical volunteer role');
+            score += 0.75;
+        }
+    }
+    else if (job.engagementModel && normalise(job.engagementModel) !== 'employee') {
         blockers.push(`Engagement model is ${job.engagementModel}, not employee employment`);
+    }
+    const excludedCoreSkills = constraintsFor(preferences, 'excludeCoreSkill').filter((item) => item.strength === 'hard');
+    for (const requiredSkill of asArray(job.requiredSkills)) {
+        const exclusion = excludedCoreSkills.find((item) => semanticSimilarity(requiredSkill, item.value) >= 0.8);
+        if (exclusion)
+            blockers.push(`Required technology ${requiredSkill} conflicts with explicit core-technology exclusion: ${exclusion.value}`);
+    }
     score += evaluateConstraint(job.programmeType, legacyConstraints(preferences, 'programmeType', preferences.programmeTypes ?? preferences.employmentTypes), 'Programme type', blockers, cautions, positives) * 1.5;
     score += evaluateConstraint(job.contractType, legacyConstraints(preferences, 'contractType', preferences.contractTypes), 'Contract type', blockers, cautions, positives) * 0.75;
     score += evaluateConstraint(job.workload, legacyConstraints(preferences, 'workload', preferences.workloads), 'Workload', blockers, cautions, positives) * 0.75;
@@ -579,9 +758,18 @@ export function classifyVerification(job, preferences, now = new Date()) {
         status = 'rejected';
         reasons.push('Source URL is invalid');
     }
-    if (BLOCKED_AGGREGATORS.some((domain) => hostname.includes(domain))) {
+    let applicationHostname = '';
+    try {
+        applicationHostname = new URL(job.applicationUrl || job.sourceUrl).hostname.toLowerCase();
+    }
+    catch { /* Source URL validation above supplies the user-facing error. */ }
+    if (BLOCKED_AGGREGATORS.some((domain) => hostname.includes(domain) || applicationHostname.includes(domain))) {
         status = 'rejected';
         reasons.push('Final link is an aggregator rather than a permitted direct vacancy page');
+    }
+    if (DISCOVERY_ONLY_HOSTS.some((domain) => applicationHostname.includes(domain))) {
+        status = 'unverified';
+        reasons.push('The final application route is a discovery job board rather than a public employer or ATS vacancy page');
     }
     const evidence = job.verificationEvidence ?? {};
     if (evidence.expiredIndicatorVisible) {
@@ -679,7 +867,8 @@ function assessmentState(job) {
         status: job.verification.status, reasons: job.verification.reasons, sourceUrl: normaliseUrl(job.sourceUrl),
         applicationUrl: normaliseUrl(job.applicationUrl), requisitionId: job.requisitionId,
         dates: Object.fromEntries(Object.entries(job.verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
-        programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, requirements: job.requirements,
+        programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
+        technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
     });
 }
 export function buildReport(session, options = {}) {
@@ -723,17 +912,26 @@ export function buildReport(session, options = {}) {
     const otherUnverified = evaluated.filter((job) => !classified.has(job));
     const sortFit = (a, b) => (b.roleFit.score + b.practicalFit.score) - (a.roleFit.score + a.practicalFit.score);
     [recommended, stretch, manualVerification].forEach((items) => items.sort(sortFit));
+    const unresolvedHighValueLeads = asArray(session.leads).filter((lead) => lead.priority === 'high' && ['blocked', 'not-opened'].includes(lead.status));
     const relatedOpportunities = asArray(session.relatedOpportunities).map((item) => ({
         ...item, url: normaliseUrl(item.url), status: classifyRelatedOpportunity(item),
-        stateFingerprint: fingerprint({ registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt, conditions: item.conditions, evidence: item.verificationEvidence }),
+        stateFingerprint: fingerprint({
+            registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt,
+            conditions: item.conditions, detailPageOpened: item.verificationEvidence?.detailPageOpened,
+            applyRouteAvailable: item.verificationEvidence?.applyRouteAvailable,
+            expiredIndicatorVisible: item.verificationEvidence?.expiredIndicatorVisible,
+            unavailableIndicatorVisible: item.verificationEvidence?.unavailableIndicatorVisible,
+        }),
     }));
     return {
+        pluginVersion: session.pluginVersion, sessionSchemaVersion: session.sessionSchemaVersion,
         generatedAt: now.toISOString(), candidate: session.candidate, preferences: session.preferences,
         searchCoverage: coverage, assumptions: asArray(session.assumptions), leads: asArray(session.leads),
         searchedCount: options.searchedCount ?? session.jobs.length,
+        excludedByProjectState: options.excludedByProjectState ?? 0,
         excludedPreviouslyReported: options.excludedPreviouslyReported ?? 0,
         updatedListingsCount: options.updatedListingsCount ?? session.jobs.filter((job) => job.historyChange === 'updated').length,
-        recommended, stretch, manualVerification, closed, incompatible, lowFit, otherUnverified, relatedOpportunities,
+        recommended, stretch, manualVerification, unresolvedHighValueLeads, closed, incompatible, lowFit, otherUnverified, relatedOpportunities,
         rejected: [...closed, ...incompatible, ...lowFit, ...otherUnverified],
     };
 }
@@ -765,7 +963,8 @@ function sourceCoverage(attempts) {
 function renderJobDetails(job, heading) {
     return [
         `${heading}${job.historyChange === 'updated' ? ' — Updated evidence' : ''}`, '',
-        `- Programme: ${job.programmeType}; contract: ${job.contractType}; workload: ${job.workload}; ${job.engagementModel ?? 'engagement model not stated'}`,
+        `- Programme: ${job.programmeType}; contract: ${job.contractType}; workload: ${job.workload}; ${job.engagementModel ?? 'engagement model not stated'}${job.isTechnicalVolunteer ? ' (technical volunteer)' : ''}`,
+        `- Compensation: ${job.compensation ? `${job.compensation.kind}${job.compensation.detail ? ` — ${job.compensation.detail}` : ''}` : 'not stated'}`,
         `- ${dateSummary(job)}`, `- Verified: ${job.verificationEvidence.verifiedAt}`,
         `- Role fit: ${job.roleFit.score}/10`, `- Practical fit: ${job.practicalFit.score}/10`,
         `- Link: ${job.applicationUrl || job.sourceUrl}`, '',
@@ -779,8 +978,12 @@ function table(items, fitLabel = 'Role fit') {
     if (!items.length)
         return [];
     return [
-        `| Role | Company | Location / arrangement | ${fitLabel} | Practical fit | Direct link |`, '|---|---|---|---:|---:|---|',
-        ...items.map((job) => `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location} / ${job.workArrangement ?? '-'}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`), '',
+        `| Role | Company | Location / arrangement | Engagement / pay | ${fitLabel} | Practical fit | Direct link |`, '|---|---|---|---|---:|---:|---|',
+        ...items.map((job) => {
+            const engagement = job.isTechnicalVolunteer ? 'Volunteer' : (job.engagementModel ?? 'Not stated');
+            const pay = job.compensation?.kind ?? 'not stated';
+            return `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location} / ${job.workArrangement ?? '-'}`)} | ${escapeCell(`${engagement} / ${pay}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`;
+        }), '',
     ];
 }
 export function renderMarkdown(report) {
@@ -788,11 +991,13 @@ export function renderMarkdown(report) {
     const criteriaOnly = report.preferences.mode === 'criteria';
     const fitLabel = criteriaOnly ? 'Criteria fit' : 'Role fit';
     const lines = [
-        '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`, '',
+        '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`,
+        `Plugin version: ${report.pluginVersion}`, `Session schema: ${report.sessionSchemaVersion}`, '',
         '## Search criteria', '', `- Mode: ${report.preferences.mode}`, `- Posting age: ${report.preferences.maxPostingAgeDays ?? 30} days`,
         `- Leads discovered: ${coverage.leadsDiscovered}`, `- Detail pages opened: ${coverage.detailPagesOpened}`,
         `- Listings assessed with evidence: ${report.searchedCount}`, `- Search families: ${coverage.searchFamilies.join(', ')}`,
         `- Queries run: ${coverage.queriesRun}`, `- Lead outcomes: ${leadBreakdown(report.leads)}`,
+        `- Persistently excluded roles/leads: ${report.excludedByProjectState ?? 0}`,
         `- Previously reported unchanged listings excluded: ${report.excludedPreviouslyReported}`,
         `- Listings with changed evidence included: ${report.updatedListingsCount}`, `- Search coverage: ${coverage.status}`, '',
         '### Search attempts', '', '| Role family | Strategy | Source | Status | Query | Leads | Detail pages |', '|---|---|---|---|---|---:|---:|',
@@ -801,6 +1006,11 @@ export function renderMarkdown(report) {
         `- Families missing broad discovery: ${coverage.missingBroadDiscoveryFamilies.join(', ') || 'none'}`,
         `- Families missing source inventory: ${coverage.missingSourceInventoryFamilies.join(', ') || 'none'}`,
         `- Employers awaiting expansion: ${coverage.unexpandedEmployers.join(', ') || 'none'}`, '',
+        `- Planned sources not completed: ${coverage.missingRequiredSourceTargets.join(', ') || 'none'}`, '',
+        `- Explicit families omitted: ${coverage.missingExplicitFamilies.join(', ') || 'none'}`,
+        `- Programme-first discovery missing: ${coverage.missingProgrammeDiscovery ? 'yes' : 'no'}`,
+        `- Programme inventory missing: ${coverage.missingProgrammeInventory ? 'yes' : 'no'}`, '',
+        ...(coverage.sourceTargets.length ? ['### Planned public sources', '', '| Source | Purpose / scope | Employer | Status | Items inspected | Note |', '|---|---|---|---|---|---:|---|', ...coverage.sourceTargets.map((target) => `| [${escapeCell(target.name)}](${target.url}) | ${target.purpose} / ${target.inventoryScope} | ${escapeCell(target.employer ?? '-')} | ${target.status} | ${Number(target.itemsInspected ?? 0)} | ${escapeCell(target.note ?? '')} |`), ''] : []),
         '### Source coverage', '', ...sourceCoverage(coverage.attempts), '', '### Assumptions', '', bulletList(report.assumptions), '', '## Verified recommendations', '',
     ];
     if (coverage.status !== 'complete')
@@ -816,12 +1026,14 @@ export function renderMarkdown(report) {
         report.stretch.forEach((job, index) => lines.push(...renderJobDetails(job, `### Stretch ${index + 1}. ${job.title} — ${job.employer}`)));
     }
     lines.push('## High-value leads requiring manual verification', '');
-    if (!report.manualVerification.length)
+    if (!report.manualVerification.length && !report.unresolvedHighValueLeads.length)
         lines.push('- None', '');
     else {
         lines.push('> These leads match the requested profile, but the exact public detail page, application route, posting date, or conflicting evidence prevented verification. They are not counted as recommendations.', '');
         for (const job of report.manualVerification)
             lines.push(`- **${job.title} — ${job.employer}** (${fitLabel} ${job.roleFit.score}/10; practical fit ${job.practicalFit.score}/10): ${job.verification.reasons.join('; ')}. [Discovery source](${job.sourceUrl})`);
+        for (const lead of report.unresolvedHighValueLeads)
+            lines.push(`- **${lead.title} — ${lead.employer}** (unresolved ${lead.status}; primary source ${lead.directSourceStatus}): ${lead.reason}. [Discovery source](${lead.url})`);
         lines.push('');
     }
     for (const [heading, items] of [
@@ -900,6 +1112,52 @@ async function readTextIfPresent(path) {
         throw error;
     }
 }
+function exclusionMatchesItem(record, item) {
+    if (normalise(record?.employer) !== normalise(item?.employer))
+        return false;
+    if (record?.url && [normaliseUrl(item?.url), normaliseUrl(item?.sourceUrl), normaliseUrl(item?.applicationUrl)].includes(normaliseUrl(record.url)))
+        return true;
+    if (record?.requisitionId && normalise(record.requisitionId) === normalise(item?.requisitionId))
+        return true;
+    if (record?.title && normalise(record.title) === normalise(item?.title))
+        return true;
+    return false;
+}
+async function loadProjectState(inputPath) {
+    const path = join(dirname(resolve(inputPath)), STATE_FILE_NAME);
+    const raw = await readTextIfPresent(path);
+    if (raw === undefined)
+        return { path, schemaVersion: 1, excludedRoles: [] };
+    let state;
+    try {
+        state = JSON.parse(raw);
+    }
+    catch {
+        throw new Error(`${STATE_FILE_NAME} is not valid JSON`);
+    }
+    if (state?.schemaVersion !== 1 || !Array.isArray(state?.excludedRoles))
+        throw new Error(`${STATE_FILE_NAME} must use schemaVersion 1 and an excludedRoles array`);
+    const decisions = new Set(['applied', 'rejected', 'not-interested', 'closed']);
+    state.excludedRoles.forEach((record, index) => {
+        if (!asText(record?.employer))
+            throw new Error(`${STATE_FILE_NAME} excludedRoles[${index}].employer is required`);
+        if (![record?.title, record?.requisitionId, record?.url].some((value) => asText(value)))
+            throw new Error(`${STATE_FILE_NAME} excludedRoles[${index}] needs title, requisitionId, or url`);
+        if (!decisions.has(record?.decision))
+            throw new Error(`${STATE_FILE_NAME} excludedRoles[${index}].decision is invalid`);
+        if (!asText(record?.decidedAt))
+            throw new Error(`${STATE_FILE_NAME} excludedRoles[${index}].decidedAt is required`);
+    });
+    return { path, ...state };
+}
+function applyProjectExclusions(session, state) {
+    const records = asArray(state?.excludedRoles);
+    const removedJobs = asArray(session.jobs).filter((job) => records.some((record) => exclusionMatchesItem(record, job)));
+    const jobs = asArray(session.jobs).filter((job) => !removedJobs.includes(job));
+    const leads = asArray(session.leads).filter((lead) => !records.some((record) => exclusionMatchesItem(record, lead))
+        && !removedJobs.some((job) => leadMatchesJob(lead, job)));
+    return { session: { ...session, jobs, leads }, excludedCount: removedJobs.length + (asArray(session.leads).length - leads.length) };
+}
 async function loadReportHistory(outputPath, now, maxPostingAgeDays) {
     const target = resolve(outputPath);
     const folder = dirname(target);
@@ -943,7 +1201,8 @@ function rawJobState(job, preferences, now) {
     return fingerprint({
         status: verification.status, reasons: verification.reasons, sourceUrl: normaliseUrl(job.sourceUrl), applicationUrl: normaliseUrl(job.applicationUrl), requisitionId: job.requisitionId,
         dates: Object.fromEntries(Object.entries(verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
-        programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, requirements: job.requirements,
+        programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
+        technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
     });
 }
 function filterHistoricalItems(items, history, identityFunction, fingerprintFunction) {
@@ -969,20 +1228,50 @@ function filterHistoricalItems(items, history, identityFunction, fingerprintFunc
     return { fresh, excluded, updated };
 }
 export async function readSession(inputPath) { return JSON.parse(await readFile(resolve(inputPath), 'utf8')); }
+export function resolveReportOutput(outputPath, options = {}) {
+    const projectDirectory = resolve(options.cwd ?? process.cwd());
+    const outputDirectory = join(projectDirectory, 'output');
+    const now = options.now ? new Date(options.now) : new Date();
+    const target = outputPath
+        ? resolve(projectDirectory, outputPath)
+        : join(outputDirectory, `nz-jobs-${aucklandDateKey(now)}.md`);
+    if (!options.allowCustomOutput && dirname(target) !== outputDirectory) {
+        throw new Error(`Report output must be inside ${outputDirectory}; omit --output to use the default, or use --allow-custom-output only when the user explicitly requested another location`);
+    }
+    return target;
+}
 export async function writeReport(inputPath, outputPath, options = {}) {
     const session = await readSession(inputPath);
     const validation = validateSession(session);
     if (!validation.valid)
         throw new Error(`Invalid session:\n- ${validation.errors.join('\n- ')}`);
+    const state = await loadProjectState(inputPath);
+    const exclusions = applyProjectExclusions(session, state);
+    const activeSession = exclusions.session;
     const now = options.now ? new Date(options.now) : new Date();
     const target = resolve(outputPath);
-    const history = await loadReportHistory(target, now, session.preferences.maxPostingAgeDays);
-    const jobs = filterHistoricalItems(session.jobs, history, jobIdentityKeys, (job) => rawJobState(job, session.preferences, now));
-    const opportunities = filterHistoricalItems(session.relatedOpportunities, history, opportunityIdentityKeys, (item) => fingerprint({ registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt, conditions: item.conditions, evidence: item.verificationEvidence }));
-    const report = buildReport({ ...session, jobs: jobs.fresh, relatedOpportunities: opportunities.fresh }, {
-        ...options, now, searchedCount: session.jobs.length,
+    const history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays);
+    const jobs = filterHistoricalItems(activeSession.jobs, history, jobIdentityKeys, (job) => rawJobState(job, activeSession.preferences, now));
+    const opportunities = filterHistoricalItems(activeSession.relatedOpportunities, history, opportunityIdentityKeys, (item) => fingerprint({
+        registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt,
+        conditions: item.conditions, detailPageOpened: item.verificationEvidence?.detailPageOpened,
+        applyRouteAvailable: item.verificationEvidence?.applyRouteAvailable,
+        expiredIndicatorVisible: item.verificationEvidence?.expiredIndicatorVisible,
+        unavailableIndicatorVisible: item.verificationEvidence?.unavailableIndicatorVisible,
+    }));
+    const reportLeads = activeSession.leads.map((lead) => {
+        if (lead.status !== 'assessed' || jobs.fresh.some((job) => leadMatchesJob(lead, job)))
+            return lead;
+        if (activeSession.jobs.some((job) => leadMatchesJob(lead, job))) {
+            return { ...lead, status: 'previously-reported', reason: 'Matching vacancy evidence is unchanged in recent report history' };
+        }
+        return lead;
+    });
+    const report = buildReport({ ...activeSession, leads: reportLeads, jobs: jobs.fresh, relatedOpportunities: opportunities.fresh }, {
+        ...options, now, searchedCount: activeSession.jobs.length,
         excludedPreviouslyReported: jobs.excluded + opportunities.excluded, updatedListingsCount: jobs.updated,
     });
+    report.excludedByProjectState = exclusions.excludedCount;
     report.newListingsCount = jobs.fresh.length;
     await mkdir(dirname(target), { recursive: true });
     const newItems = jobs.fresh.length + opportunities.fresh.length;
@@ -1008,6 +1297,8 @@ function parseArgs(argv) {
             values.input = rest[++index];
         else if (token === '--output' || token === '-o')
             values.output = rest[++index];
+        else if (token === '--allow-custom-output')
+            values.allowCustomOutput = true;
         else if (token === '--help' || token === '-h')
             values.help = true;
         else
@@ -1015,7 +1306,7 @@ function parseArgs(argv) {
     }
     return values;
 }
-function usage() { return ['NZ Job Scout runtime', '', 'Usage:', '  nz-job-scout validate --input SESSION.json', '  nz-job-scout report --input SESSION.json --output REPORT.md'].join('\n'); }
+function usage() { return ['NZ Job Scout runtime', '', 'Usage:', '  nz-job-scout validate --input SESSION.json', '  nz-job-scout report --input SESSION.json', '  nz-job-scout report --input SESSION.json --output REPORT.md --allow-custom-output'].join('\n'); }
 export async function runCli(argv = process.argv.slice(2)) {
     try {
         const args = parseArgs(argv);
@@ -1035,14 +1326,13 @@ export async function runCli(argv = process.argv.slice(2)) {
             return 0;
         }
         if (args.command === 'report') {
-            if (!args.output)
-                throw new Error('--output is required for report');
-            const report = await writeReport(args.input, args.output);
+            const output = resolveReportOutput(args.output, { allowCustomOutput: args.allowCustomOutput === true });
+            const report = await writeReport(args.input, output);
             if (report.writeAction === 'unchanged')
-                console.log(`No new or changed items; existing report left unchanged: ${resolve(args.output)} (${report.excludedPreviouslyReported} unchanged item(s))`);
+                console.log(`No new or changed items; existing report left unchanged: ${output} (${report.excludedPreviouslyReported} unchanged item(s))`);
             else {
                 const action = report.writeAction === 'appended' ? 'updated incrementally' : 'created';
-                console.log(`Report ${action}: ${resolve(args.output)} (${report.recommended.length} recommendation(s), ${report.stretch.length} stretch, ${report.manualVerification.length} manual-verification lead(s), ${report.updatedListingsCount} updated)`);
+                console.log(`Report ${action}: ${output} (${report.recommended.length} recommendation(s), ${report.stretch.length} stretch, ${report.manualVerification.length + report.unresolvedHighValueLeads.length} manual-verification lead(s), ${report.updatedListingsCount} updated)`);
             }
             return 0;
         }
