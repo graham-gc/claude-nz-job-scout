@@ -16,6 +16,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
+  "pluginVersion": "0.6.0",
+  "sessionSchemaVersion": 3,
   "candidate": {
     "name": "Example Candidate",
     "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
@@ -39,6 +41,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "country": "New Zealand",
       "status": "temporary",
       "unrestricted": false,
+      "evidenceSource": "user-explicit",
       "validUntil": "2027-12-31",
       "visaType": "Student Visa",
       "notes": ["Work conditions vary between teaching periods and scheduled breaks"]
@@ -87,12 +90,68 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         "value": "hybrid",
         "strength": "soft",
         "source": "resume-inferred"
+      },
+      {
+        "field": "excludeCoreSkill",
+        "value": "C#/.NET",
+        "strength": "hard",
+        "source": "user-explicit"
       }
-    ]
+    ],
+    "includeTechnicalVolunteer": false
   },
   "searchCoverage": {
-    "searchFamilies": ["software test engineering", "Java backend"],
+    "searchFamilies": ["software test engineering", "Java backend", "software support"],
+    "explicitSearchFamilies": ["software support"],
+    "programmeFirstRequired": true,
+    "sourceTargets": [
+      {
+        "name": "Public job-board discovery",
+        "purpose": "board-discovery",
+        "status": "searched",
+        "url": "https://jobs.example.nz/search",
+        "inventoryScope": "search-results",
+        "itemUrls": ["https://jobs.example.nz/job/example-engineering-nz-101"],
+        "itemsInspected": 1,
+        "requiredForCoverage": true,
+        "note": "Public result pages and indexed leads inspected"
+      },
+      {
+        "name": "Auckland student programme inventory",
+        "purpose": "programme-inventory",
+        "status": "searched",
+        "url": "https://careers.example.nz/students",
+        "inventoryScope": "listing-page",
+        "itemUrls": ["https://careers.example.nz/students/software-test-engineer-intern"],
+        "itemsInspected": 1,
+        "requiredForCoverage": true,
+        "note": "Broad student and early-career inventory inspected before duty filtering"
+      },
+      {
+        "name": "Example Engineering public ATS inventory",
+        "purpose": "employer-ats",
+        "employer": "Example Engineering",
+        "status": "searched",
+        "url": "https://careers.example.com/jobs",
+        "inventoryScope": "ats-board",
+        "itemUrls": ["https://careers.example.com/jobs/NZ-101"],
+        "itemsInspected": 1,
+        "requiredForCoverage": true,
+        "note": "Public employer and ATS vacancy inventories inspected"
+      }
+    ],
     "attempts": [
+      {
+        "roleFamily": "student technology programmes",
+        "strategy": "programme-discovery",
+        "source": "Public programme inventories",
+        "query": "Auckland internship and student technology opportunities",
+        "status": "searched",
+        "leadsDiscovered": 2,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true,
+        "note": "Generic technical programme titles were retained for duty review"
+      },
       {
         "roleFamily": "software test engineering",
         "strategy": "broad-discovery",
@@ -148,6 +207,26 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         "detailPagesOpened": 0,
         "requiredForCoverage": true,
         "note": "The public employer inventory contained no additional current roles"
+      },
+      {
+        "roleFamily": "software support",
+        "strategy": "broad-discovery",
+        "source": "Web search",
+        "query": "technology services intern Auckland",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true
+      },
+      {
+        "roleFamily": "software support",
+        "strategy": "source-inventory",
+        "source": "Public ATS pages",
+        "query": "Auckland technology and digital services vacancies",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true
       }
     ]
   },
@@ -161,6 +240,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "discoveredAt": "2026-09-01T09:00:00+12:00",
       "detailPageOpened": true,
       "status": "assessed",
+      "priority": "high",
+      "directSourceStatus": "found",
       "employerExpansionRequired": false,
       "employerExpansionReason": "The lead came from the employer careers inventory already inspected in this run"
     },
@@ -173,6 +254,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "discoveredAt": "2026-09-01T09:10:00+12:00",
       "detailPageOpened": false,
       "status": "not-opened",
+      "priority": "high",
+      "directSourceStatus": "not-found",
       "employerExpansionRequired": true,
       "employerExpansionReason": "The employer was discovered through a restricted job-board detail page and its vacancy inventory has not been inspected",
       "reason": "Exact detail page was not anonymously accessible and no primary copy was found"
@@ -193,6 +276,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "contractType": "fixed-term",
       "workload": "full-time",
       "engagementModel": "employee",
+      "compensation": { "kind": "paid", "detail": "Hourly rate stated on the vacancy" },
       "hoursPerWeek": 40,
       "summary": "API and backend quality-engineering work",
       "roleFamilies": ["software test engineering", "backend engineering"],
@@ -292,6 +376,12 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 - workload: `full-time`, `part-time`, `variable`, `not-stated`;
 - constraint strength: `hard`, `soft`;
 - constraint source: `user-explicit`, `conversation-context`, `resume-inferred`, `skill-default`;
+- source-target purpose: `board-discovery`, `programme-inventory`, `employer-ats`, `technical-volunteer`;
+- inventory scope: `listing-page`, `ats-board`, `search-results`, `single-detail`, `event-page`;
+- work-right evidence source: `user-explicit`, `resume`, `official-document`, `unknown`;
+- lead priority: `high`, `normal`, `low`;
+- direct-source status: `found`, `not-found`, `not-checked`;
+- compensation kind: `paid`, `unpaid`, `reimbursed`, `unknown`;
 - requirement strength: `hard`, `preference`;
 - requirement compatibility: `met`, `not-met`, `unknown`;
 - attempt status: `searched`, `discovery-only`, `blocked`, `unavailable`, `skipped`;
@@ -304,19 +394,22 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 - Determine depth from repeated duties, duration, recency, ownership, and outcomes—not keyword count.
 - Keep qualifications and work rights separate from technical skills.
-- Preserve visa wording exactly; temporary or hour-limited rights are not unrestricted.
+- Preserve visa wording exactly; temporary or hour-limited rights are not unrestricted. Set `evidenceSource` and leave rights unknown unless the user, CV, or an official document supplies them.
 - Availability uses explicit date windows and maximum weekly hours. Do not replace this with a vague sentence.
 - Explicit user requirements are usually `hard`; inferred preferences and defaults are normally `soft` unless the user clearly made them mandatory.
 
 ### Search audit
 
 - `searchCoverage` is required even when no jobs are assessed.
+- `sourceTargets` is required. Every target records `inventoryScope`, the exact inspected `itemUrls`, and an equal `itemsInspected` count. An employer/ATS target names one employer and uses a public employer or ATS listing/board. A programme inventory cannot be a single detail or event page. A required target that is not `searched` makes coverage partial.
 - Record every search operation in `attempts`; the runtime derives coverage and ignores any hand-written `status`.
 - Every discovered lead belongs in `leads`, even if duplicated, inaccessible, out of scope, or not opened.
+- Every assessed lead must match one `jobs[]` record by canonical URL or exact employer/title. Unresolved high-priority leads remain visible in the report.
 - A non-`assessed` lead requires a reason.
 - Every attempt declares one strategy: `broad-discovery`, `source-inventory`, `employer-expansion`, or `focused-follow-up`. `searched` means the intended result set or public inventory was inspected; it does not by itself verify any discovered vacancy.
 - `complete` requires a successful broad-discovery and source-inventory attempt for every intended family, successful expansion of every employer marked as requiring it, and no material required-source failure. Otherwise coverage is partial or blocked.
 - Broad discovery intentionally avoids unnecessary technology constraints. Technology and duty fit are evaluated after candidates are collected.
+- Use a hard `excludeCoreSkill` constraint only when the candidate explicitly rejects that technology as a core day-to-day requirement. This blocks roles requiring it; it does not suppress a role that merely lists it as optional exposure.
 - Every lead records `employerExpansionRequired` and a reason. A role that is closed, senior, permanent, or otherwise unsuitable can still reveal an employer whose current inventory must be inspected.
 
 ### Jobs and dates
@@ -326,6 +419,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 - Put technical requirements in `requiredSkills`/`preferredSkills`; put study, degree, work-right, citizenship, availability, security, and export-control rules in `requirements`.
 - A hard `not-met` requirement is a blocker. A hard `unknown` requirement is a caution requiring manual confirmation. A preference does not become a hard blocker.
 - Record programme, contract, and workload independently. A full-time fixed-term summer internship remains an internship.
+- A volunteer role is eligible only when the user requested technical volunteering and the session sets `engagementModel: "volunteer"` and `isTechnicalVolunteer: true`. Record its compensation status explicitly; it is not employee employment.
 - Dates use ISO 8601. Use `YYYY-MM-DD` when only a date is visible. A date-only closing deadline remains open through that entire `Pacific/Auckland` calendar day.
 - Record each date observation separately with URL, source type, and confidence. Do not choose silently between conflicting values; the runtime marks conflicting evidence unverified.
 - Public employer/ATS content has stronger provenance than an indexed snippet. A snippet can remain a discovery lead but cannot make a job verified by itself.
@@ -342,3 +436,4 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 - Never record credentials, cookies, tokens, private browser state, or unrelated personal data.
 - Generated reports contain hidden non-sensitive identity/state markers. The runtime uses them to suppress unchanged roles and to re-report materially changed evidence as `Updated evidence`.
 - Do not delete or edit those markers manually when incremental reporting is desired.
+- User decisions belong in the ignored project-local `.nz-job-scout-state.json`; see [state-file.md](state-file.md). Verification timestamps alone do not make an unchanged opportunity new.

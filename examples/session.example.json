@@ -1,4 +1,6 @@
 {
+  "pluginVersion": "0.6.0",
+  "sessionSchemaVersion": 3,
   "candidate": {
     "name": "Example Candidate",
     "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
@@ -12,6 +14,7 @@
       "country": "New Zealand",
       "status": "temporary",
       "unrestricted": false,
+      "evidenceSource": "user-explicit",
       "validUntil": "2027-12-31",
       "visaType": "Student Visa"
     },
@@ -39,8 +42,25 @@
     ]
   },
   "searchCoverage": {
-    "searchFamilies": ["software test engineering", "Java backend"],
+    "searchFamilies": ["software test engineering", "Java backend", "software support"],
+    "explicitSearchFamilies": ["software support"],
+    "programmeFirstRequired": true,
+    "sourceTargets": [
+      { "name": "Public job-board discovery", "purpose": "board-discovery", "status": "searched", "url": "https://jobs.example.nz/search", "inventoryScope": "search-results", "itemUrls": ["https://jobs.example.nz/job/example-engineering-nz-101"], "itemsInspected": 1, "requiredForCoverage": true },
+      { "name": "Auckland student programme inventory", "purpose": "programme-inventory", "status": "searched", "url": "https://careers.example.nz/students", "inventoryScope": "listing-page", "itemUrls": ["https://careers.example.nz/students/software-test-engineer-intern"], "itemsInspected": 1, "requiredForCoverage": true },
+      { "name": "Example Engineering public ATS inventory", "purpose": "employer-ats", "employer": "Example Engineering", "status": "searched", "url": "https://careers.example.com/jobs", "inventoryScope": "ats-board", "itemUrls": ["https://careers.example.com/jobs/NZ-101"], "itemsInspected": 1, "requiredForCoverage": true }
+    ],
     "attempts": [
+      {
+        "roleFamily": "student technology programmes",
+        "strategy": "programme-discovery",
+        "source": "Public student programme inventories",
+        "query": "Auckland internship and student technology opportunities",
+        "status": "searched",
+        "leadsDiscovered": 1,
+        "detailPagesOpened": 1,
+        "requiredForCoverage": true
+      },
       {
         "roleFamily": "software test engineering",
         "strategy": "broad-discovery",
@@ -84,6 +104,26 @@
         "detailPagesOpened": 0,
         "requiredForCoverage": true,
         "note": "Example public ATS inventory"
+      },
+      {
+        "roleFamily": "software support",
+        "strategy": "broad-discovery",
+        "source": "Web search",
+        "query": "technology services intern Auckland",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true
+      },
+      {
+        "roleFamily": "software support",
+        "strategy": "source-inventory",
+        "source": "Public ATS pages",
+        "query": "Auckland technology and digital services vacancies",
+        "status": "searched",
+        "leadsDiscovered": 0,
+        "detailPagesOpened": 0,
+        "requiredForCoverage": true
       }
     ]
   },
@@ -97,6 +137,8 @@
       "discoveredAt": "2026-09-01T09:00:00+12:00",
       "detailPageOpened": true,
       "status": "assessed",
+      "priority": "high",
+      "directSourceStatus": "found",
       "employerExpansionRequired": false,
       "employerExpansionReason": "The employer careers inventory was already inspected in this run"
     }

@@ -4,6 +4,7 @@ description: Analyse a local PDF or Markdown CV and/or user criteria, research p
 allowed-tools:
   - Read
   - Edit(.nz-job-scout-session-*.json)
+  - Edit(.nz-job-scout-state.json)
   - WebSearch
   - WebFetch
   - Bash(nz-job-scout validate *)
@@ -36,6 +37,10 @@ Defaults:
 
 Before research, read [references/session-format.md](references/session-format.md) completely. It is the evidence contract used by the deterministic runtime.
 
+For each run, also read [references/source-planning.md](references/source-planning.md). It defines how to build a bounded public-source plan without guessing every possible job title.
+
+Read [references/state-file.md](references/state-file.md) when a project state file exists or when the user reports an application decision. It defines persistent, role-specific exclusions.
+
 ## Public-source boundary
 
 Use only anonymously accessible information. Never request, inspect, import, export, or retain cookies, passwords, tokens, browser storage, private profiles, logged-in sessions, paid extensions, or employer-only partner credentials.
@@ -66,7 +71,13 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-In profile or combined mode, derive a small set of materially distinct responsibility families from sustained recent work. In criteria mode, preserve explicit scope. Do not attempt a Cartesian product of titles, technologies, seniority terms, locations, and employment types. Search for high recall first, then use duties and experience depth to rank the collected vacancies.
+Start every evidence session with `pluginVersion: "0.6.0"` and `sessionSchemaVersion: 3`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+
+Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
+
+Build `searchFamilies` as a union of every role family explicitly requested by the user or retained conversation context and the materially distinct responsibility families supported by sustained recent work. Record the explicit group separately in `explicitSearchFamilies`; never remove one merely because another family is more recent or easier to search. In criteria mode, preserve the complete explicit scope. Do not attempt a Cartesian product of titles, technologies, seniority terms, locations, and employment types.
+
+When the request includes internships, graduate roles, studentships, placements, fixed-term student work, part-time student work, or summer work, set `programmeFirstRequired: true` and perform a `programme-discovery` pass before stack-specific searching. Inspect broad student and early-career programme inventories without CV technology terms. Capture every plausibly technical vacancy first, including generic titles such as Technology Services Intern, Digital Services Intern, Systems Intern, ICT Intern, Service Management Intern, and Application Support Intern. Rank or reject them only after reading their duties. A title that omits “software”, “Java”, “QA”, or “automation” must not be discarded before duty review.
 
 For every intended family, complete both discovery routes:
 
@@ -79,13 +90,19 @@ Whenever a lead reveals an employer operating in an intended responsibility fami
 
 Continue discovery adaptively. After both required routes are attempted for a family, stop optional reformulation when two consecutive `focused-follow-up` operations produce no new canonical vacancy identities. Finding one vacancy is never a stopping condition. A blocked source makes coverage partial; it does not justify repeated retries or bypassing access controls.
 
+Create `searchCoverage.sourceTargets[]` before searching. Include at least one public board-discovery target and one employer/ATS target. Use one employer/ATS target per named employer; never group several employers under one URL. For programme-first scans, also include a programme-inventory target whose public listing collection is broad enough to expose generic early-career titles. Record `inventoryScope`, the exact target URL, every inspected `itemUrls` entry, and the matching `itemsInspected` count, including zero. Set each target to `searched`, `discovery-only`, `blocked`, `unavailable`, or `skipped` after the run. An aggregator, unrelated overseas inventory, single job detail page, event page, or search snippet is not a completed employer or Auckland/New Zealand programme inventory.
+
+When the user explicitly permits technical volunteering, set `preferences.includeTechnicalVolunteer: true`, add a technical-volunteer source target, and search only for roles with clearly stated software, QA, automation, backend, platform, developer-productivity, or software-support duties. Record `engagementModel: "volunteer"`, `isTechnicalVolunteer: true`, and whether it is paid, unpaid, reimbursed, or unknown. Do not label a general community, event, fundraising, or administrative role as technical. Never present volunteer work as paid employment.
+
+When the candidate explicitly rules out a technology as a core daily requirement, record a hard `excludeCoreSkill` constraint. A role whose required technology matches that constraint is practically incompatible even if its title or generic duties look related.
+
 ## Search audit trail
 
-For every search operation, record a `searchCoverage.attempts[]` entry with its role family, strategy, source, exact query, result status, discovered-lead count, opened-detail count, optional employer, and limitation note. Record every discovered lead in `leads[]`, including duplicates, inaccessible pages, out-of-scope results, and leads that were never opened. Each lead must record the employer-expansion decision and reason. This creates an auditable funnel:
+For every search operation, record a `searchCoverage.attempts[]` entry with its role family, strategy, source, exact query, result status, discovered-lead count, opened-detail count, optional employer, and limitation note. Record every discovered lead in `leads[]`, including duplicates, inaccessible pages, out-of-scope results, and leads that were never opened. Each lead must record `priority`, `directSourceStatus`, and the employer-expansion decision and reason. Every `assessed` lead must have a matching `jobs[]` evidence record. High-priority blocked or unopened leads must stay visible for manual verification rather than disappearing. This creates an auditable funnel:
 
 `query -> discovered lead -> opened detail page -> assessed listing -> recommendation/rejection`
 
-Do not set coverage status manually. The runtime derives `complete`, `partial`, or `blocked` from the attempts. Complete coverage requires, for every family, a successful `broad-discovery` attempt, a successful `source-inventory` attempt, and a successful `employer-expansion` attempt for every lead marked as requiring it:
+Do not set coverage status manually. The runtime derives `complete`, `partial`, or `blocked` from the attempts. Complete coverage requires every explicit family to remain present; every family to have successful `broad-discovery` and `source-inventory` attempts; every required employer expansion to be completed; and, when programme-first is required, both a successful `programme-discovery` attempt and a searched programme inventory:
 
 - `searched`: the intended discovery result set or public inventory was inspected;
 - `discovery-only`: leads were visible but primary details could not be verified;
@@ -120,7 +137,7 @@ For each assessed vacancy record:
 - explicit work-right requirements separately from candidate work rights;
 - exact detail-page and application-route evidence with a `Pacific/Auckland` verification time.
 
-Do not confuse a full-time fixed-term summer internship with permanent full-time employment. A temporary student visa is not unrestricted work rights. `unknown` is safer than an unsupported `met`.
+Do not confuse a full-time fixed-term summer internship with permanent full-time employment. A temporary student visa is not unrestricted work rights, and full-time availability during a scheduled break is not post-study work status. Record a work-right `evidenceSource`; leave facts unknown unless the user, CV, or an official document states them. `unknown` is safer than an unsupported `met`.
 
 Treat events, talent pools, candidate programmes, and recruitment channels as `relatedOpportunities[]`, not jobs. Preserve conditional audiences: for example, an event open only to candidates already registered for a programme is `conditional`, not generally open. Do not encode one user's channel preference as a universal exclusion.
 
@@ -130,15 +147,17 @@ Quote paths and run:
 
 ```bash
 nz-job-scout validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
-nz-job-scout report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
+nz-job-scout report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
 ```
 
 If the installed command is unavailable:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
-node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json" --output "/absolute/path/to/output/nz-jobs-YYYY-MM-DD.md"
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
 ```
+
+Run the report command from the user's current project directory. The runtime writes to `./output/nz-jobs-YYYY-MM-DD.md` and keeps history in that directory. Do not supply `--output` for the normal workflow. Only when the user explicitly requests another location may you pass both `--output "/requested/path/report.md"` and `--allow-custom-output`.
 
 The runtime is authoritative for validation, date conflicts, search coverage, deduplication, fit scoring, eligibility blockers, categorisation, and Markdown output. Correct invalid evidence instead of bypassing validation or hand-editing scores.
 
@@ -153,13 +172,13 @@ The report separates:
 - other rejected or unverified items;
 - related opportunities and recruitment channels.
 
-If today's report already exists, the runtime appends only new or materially changed items. Across recent daily reports, unchanged roles are suppressed. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`.
+If today's report already exists, the runtime appends only new or materially changed items. Across recent daily reports, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`.
 
 After a successful report, remove the exact temporary session filename unless the user asks to keep it. Never use a wildcard in the cleanup command.
 
 ## Return the result
 
-Give the absolute report path, the search funnel counts, strongest verified roles, manual-verification leads, blockers, and coverage limits. Do not recommend a role merely because logistics fit when the day-to-day work fit is weak.
+Give the absolute report path, then quote the report's funnel counts, strongest verified roles, manual-verification leads, blockers, and coverage limits. The deterministic report is authoritative: do not add a date, deadline, sponsorship statement, work-right claim, recommendation, or market conclusion that is absent from it. Do not recommend a role merely because logistics fit when the day-to-day work fit is weak.
 
 Use bounded language:
 

@@ -27,6 +27,7 @@ export interface WorkRights {
   country: string;
   status: 'temporary' | 'unrestricted' | 'none';
   unrestricted: boolean;
+  evidenceSource: 'user-explicit' | 'resume' | 'official-document' | 'unknown';
   validUntil?: string;
   visaType?: string;
   notes?: string[];
@@ -57,12 +58,27 @@ export interface SearchPreferences {
   keywords?: string[];
   maxPostingAgeDays: number;
   includeUnverified?: boolean;
+  /** Include only explicitly technical volunteer work when the user asks for it. */
+  includeTechnicalVolunteer?: boolean;
   constraints: SearchConstraint[];
   programmeTypes?: ProgrammeType[];
   contractTypes?: ContractType[];
   workloads?: Workload[];
   locations?: string[];
   workArrangements?: WorkArrangement[];
+}
+
+export interface SourceTarget {
+  name: string;
+  purpose: 'board-discovery' | 'programme-inventory' | 'employer-ats' | 'technical-volunteer';
+  status: 'searched' | 'discovery-only' | 'blocked' | 'unavailable' | 'skipped';
+  url: string;
+  itemsInspected: number;
+  inventoryScope: 'listing-page' | 'ats-board' | 'search-results' | 'single-detail' | 'event-page';
+  itemUrls: string[];
+  employer?: string;
+  requiredForCoverage?: boolean;
+  note?: string;
 }
 
 export interface DateObservation {
@@ -103,6 +119,12 @@ export interface JobPosting {
   contractType: ContractType;
   workload: Workload;
   engagementModel?: string;
+  /** Must be true before a volunteer role can be recommended. */
+  isTechnicalVolunteer?: boolean;
+  compensation?: {
+    kind: 'paid' | 'unpaid' | 'reimbursed' | 'unknown';
+    detail?: string;
+  };
   hoursPerWeek?: number;
   summary?: string;
   roleFamilies: string[];
@@ -126,7 +148,7 @@ export interface SearchAttempt {
   roleFamily: string;
   source: string;
   query: string;
-  strategy: 'broad-discovery' | 'source-inventory' | 'employer-expansion' | 'focused-follow-up';
+  strategy: 'programme-discovery' | 'broad-discovery' | 'source-inventory' | 'employer-expansion' | 'focused-follow-up';
   employer?: string;
   status: 'searched' | 'discovery-only' | 'blocked' | 'unavailable' | 'skipped';
   leadsDiscovered?: number;
@@ -144,6 +166,8 @@ export interface SearchLead {
   discoveredAt: string;
   detailPageOpened: boolean;
   status: 'assessed' | 'duplicate' | 'blocked' | 'not-opened' | 'out-of-scope' | 'previously-reported';
+  priority: 'high' | 'normal' | 'low';
+  directSourceStatus: 'found' | 'not-found' | 'not-checked';
   employerExpansionRequired: boolean;
   employerExpansionReason: string;
   reason?: string;
@@ -163,9 +187,17 @@ export interface RelatedOpportunity {
 }
 
 export interface ScoutSession {
+  pluginVersion: string;
+  sessionSchemaVersion: number;
   candidate: CandidateProfile;
   preferences: SearchPreferences;
-  searchCoverage: { searchFamilies: string[]; attempts: SearchAttempt[] };
+  searchCoverage: {
+    searchFamilies: string[];
+    explicitSearchFamilies: string[];
+    programmeFirstRequired: boolean;
+    attempts: SearchAttempt[];
+    sourceTargets: SourceTarget[];
+  };
   leads: SearchLead[];
   jobs: JobPosting[];
   relatedOpportunities: RelatedOpportunity[];

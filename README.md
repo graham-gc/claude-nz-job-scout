@@ -2,7 +2,7 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.5.0 alpha — adaptive high-recall public-source search.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates provenance and discovery-plan coverage, detects date conflicts, rejects stale or unsuitable listings, deduplicates by state, scores, and writes the report.
+> Status: **0.6.0 alpha — evidence-backed public-source search with stronger integrity checks.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates the evidence funnel, source inventories, work-right claims, persistent exclusions, URL identity, dates, ranking, and report output. Coverage remains limited to the public sources actually completed in each run.
 
 ## What works now
 
@@ -17,17 +17,36 @@ A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, 
 - keeps evidence-backed recommendations separate from lower-alignment stretch roles;
 - records each search attempt and every discovered lead, including blocked and rejected leads;
 - uses broad discovery plus source-inventory scans instead of trying to enumerate every possible title-and-skill query;
+- scans broad student and early-career programme inventories before stack-specific queries, so generic titles such as Technology Services Intern are assessed by duties rather than missed by title;
+- preserves every role family explicitly requested by the user instead of allowing CV recency to silently remove it;
 - expands a relevant employer's current vacancy inventory when any related role reveals that employer;
 - requires both discovery routes and required employer expansions before reporting complete coverage;
+- requires every planned public source target to be completed before reporting complete coverage;
 - distinguishes complete, partial, and blocked searches so access failures are never reported as “no vacancies”;
 - separates internship/graduate programme type, contract type, and full-/part-time workload;
 - checks structured availability windows, work rights, and hard versus preferred eligibility requirements;
+- supports explicitly requested, clearly technical volunteer roles while marking their compensation separately from employment;
+- blocks roles whose required core technology conflicts with an explicit candidate exclusion;
 - preserves conflicting date evidence instead of silently choosing one date;
 - separates jobs from events, talent pools, and conditional recruitment programmes;
 - incrementally re-reports a role when its dates, availability, requirements, or verification state change;
 - saves a structured Markdown report.
+- prints the plugin and evidence-schema versions in every report so stale installed copies are visible.
+- writes reports to the current project's `output/` directory by default and rejects accidental root-level output unless the user explicitly authorises a custom location.
+- requires each assessed lead to have a matching vacancy evidence record and keeps unresolved high-priority leads visible;
+- requires source inventories to list the exact inspected item URLs and rejects single detail/event pages masquerading as an inventory;
+- rejects conflicting reuse of one vacancy URL for different employers or titles;
+- stores user decisions in an ignored project-local `.nz-job-scout-state.json` file so applied, rejected, closed, or unwanted roles stay excluded;
+- rejects unsupported claims of unrestricted or post-study work rights;
+- ignores verification timestamps when deciding whether an unchanged related opportunity should reappear.
 
 The default posting window is 30 days and can be overridden.
+
+## Personal search state
+
+Version 0.6.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
+
+The file is ignored by Git and is not included in the marketplace package. It contains no credentials or browser state.
 
 ## Public-source policy
 
@@ -173,7 +192,9 @@ npm run typecheck
 npm test
 npm run build:check
 node bin/nz-job-scout validate --input ../../examples/session.example.json
-node bin/nz-job-scout report --input ../../examples/session.example.json --output /tmp/nz-job-scout-report.md
+node bin/nz-job-scout report --input ../../examples/session.example.json
+# Explicit custom-output test:
+node bin/nz-job-scout report --input ../../examples/session.example.json --output /tmp/nz-job-scout-report.md --allow-custom-output
 ```
 
 From the repository root:
