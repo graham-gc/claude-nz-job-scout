@@ -9,6 +9,8 @@ Create `searchCoverage.sourceTargets[]` before searching. Every target records a
 1. one public board or search-discovery target, used only to discover employer names and canonical vacancy links;
 2. one employer/ATS inventory target for one named employer, such as a public Workday, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, employer careers listing, or public careers sitemap. Create separate targets for separate employers.
 
+When the ATS and its public board/account identifier are known, use the bundled `nz-job-scout inventory` adapter first. It supports Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday sites. Record adapter failure once and continue with public pages; do not retry a restricted endpoint.
+
 For internship, graduate, studentship, placement, fixed-term student, part-time student, or summer-work searches, also plan a `programme-inventory` target that exposes a broad current collection for the eligible geography without requiring role-title or technology keywords. A single vacancy detail page, expired event page, search snippet, or overseas inventory cannot satisfy this target.
 
 Run this programme inventory first. Record a `programme-discovery` attempt and collect plausibly technical entries before applying CV-fit filters. Generic titles are expected: Technology Services, Digital Services, ICT, Systems, Service Management, Application Support, and similar roles may contain relevant software-support, integration, testing, data, platform, or operational engineering work.
@@ -31,6 +33,8 @@ Use a broad title/stage query for each responsibility family. Then inspect an in
 Every source target records its canonical public URL, `inventoryScope`, and every inspected item URL. A source target is not `searched` merely because one result or one detail page was opened. Aggregators and discovery boards cannot serve as employer/ATS inventories. Overseas, unrelated, or generic web results cannot satisfy a location-specific programme inventory.
 
 Assign every lead a `priority` and `directSourceStatus`. High priority means the title, duties, employer, programme stage, or snippet gives a concrete reason to believe the role may be eligible. If a high-priority lead cannot be opened or no primary page can be found, keep it as an unresolved manual-verification lead; do not silently drop it.
+
+For every assessed vacancy, retain every observed copy in `sourceEvidence[]`. Evidence precedence is employer/ATS, then public job board, then indexed search result, then aggregator. A lower-precedence duplicate can help discovery but cannot replace or downgrade a verified official source, date, requirement, or application route.
 
 Each `assessed` lead must produce one matching `jobs[]` record. Use the exact canonical detail URL whenever possible. Never reuse one LinkedIn, board, employer, or ATS detail URL for two materially different employer/title pairs.
 

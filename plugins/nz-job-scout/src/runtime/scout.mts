@@ -10,8 +10,8 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PLUGIN_VERSION = '0.6.0';
-export const SESSION_SCHEMA_VERSION = 3;
+export const PLUGIN_VERSION = '0.7.0';
+export const SESSION_SCHEMA_VERSION = 4;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
 const CONCEPT_GROUPS = [
@@ -37,8 +37,9 @@ const BLOCKED_AGGREGATORS = [
   'omnijobs.', 'alion.io', 'hiringcafe.', 'freehire.',
 ];
 const DISCOVERY_ONLY_HOSTS = ['seek.', 'linkedin.', 'indeed.'];
-const DAILY_REPORT_PATTERN = /^nz-jobs-(\d{4}-\d{2}-\d{2})\.md$/;
+const DAILY_REPORT_PATTERN = /^nz-jobs-(\d{4}-\d{2}-\d{2})(?:-[a-f0-9]{8})?\.md$/;
 const ITEM_MARKER = /<!-- nz-job-scout:item (\{.+?\}) -->/g;
+const CONTEXT_MARKER = /<!-- nz-job-scout:context (\{.+?\}) -->/;
 const STATE_FILE_NAME = '.nz-job-scout-state.json';
 const UNSUPPORTED_WORK_RIGHTS_ASSUMPTION = /\b(unrestricted work rights?|post[- ]graduation(?: work)? rights?|post[- ]study work rights?)\b/i;
 
@@ -47,6 +48,7 @@ const asArray = (value) => Array.isArray(value) ? value : [];
 const clamp = (value, min = 0, max = 10) => Math.max(min, Math.min(max, value));
 const round1 = (value) => Math.round(value * 10) / 10;
 const normalise = (value) => asText(value).toLowerCase().replace(/[^a-z0-9+#.]+/g, ' ').trim();
+const SOURCE_KIND_WEIGHT = { employer: 5, ats: 5, 'job-board': 3, 'search-result': 2, aggregator: 1 };
 
 function aucklandDateKey(value) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -114,9 +116,67 @@ function fingerprint(value) {
   return createHash('sha256').update(canonicalJson(value)).digest('hex').slice(0, 20);
 }
 
+export function deriveScanContext(session) {
+  const resumeFingerprint = asText(session.resumeFingerprint) || undefined;
+  const criteriaFingerprint = fingerprint({
+    keywords: asArray(session.preferences?.keywords),
+    maxPostingAgeDays: Number(session.preferences?.maxPostingAgeDays ?? 30),
+    includeTechnicalVolunteer: session.preferences?.includeTechnicalVolunteer === true,
+    constraints: asArray(session.preferences?.constraints),
+    programmeTypes: asArray(session.preferences?.programmeTypes),
+    contractTypes: asArray(session.preferences?.contractTypes),
+    workloads: asArray(session.preferences?.workloads),
+    locations: asArray(session.preferences?.locations),
+    workArrangements: asArray(session.preferences?.workArrangements),
+  });
+  const scanContextFingerprint = fingerprint({ mode: session.preferences?.mode, resumeFingerprint, criteriaFingerprint });
+  return { mode: session.preferences?.mode, resumeFingerprint, criteriaFingerprint, scanContextFingerprint };
+}
+
+function parseContextMarker(markdown) {
+  const match = markdown.match(CONTEXT_MARKER);
+  if (!match) return undefined;
+  try { return JSON.parse(match[1]); }
+  catch { return undefined; }
+}
+
 function hostMatches(value, domains) {
   try { return domains.some((domain) => new URL(value).hostname.toLowerCase().includes(domain)); }
   catch { return false; }
+}
+
+function sourceEvidenceRank(entry) {
+  return (SOURCE_KIND_WEIGHT[entry?.kind] ?? 0) * 10
+    + Number(entry?.detailPageOpened === true) * 3
+    + Number(entry?.applyRouteAvailable === true) * 3
+    + Number(Boolean(entry?.applicationUrl))
+    + Number(Boolean(entry?.requisitionId));
+}
+
+function bestSourceEvidence(job) {
+  return [...asArray(job.sourceEvidence)].sort((left, right) => sourceEvidenceRank(right) - sourceEvidenceRank(left))[0];
+}
+
+function canonicaliseJobEvidence(job) {
+  const sourceEvidence = [...asArray(job.sourceEvidence)].sort((left, right) => sourceEvidenceRank(right) - sourceEvidenceRank(left));
+  const strongest = sourceEvidence[0];
+  if (!strongest) return job;
+  return {
+    ...job,
+    source: strongest.name,
+    sourceUrl: normaliseUrl(strongest.url),
+    applicationUrl: normaliseUrl(strongest.applicationUrl || (strongest.applyRouteAvailable ? strongest.url : '')),
+    requisitionId: strongest.requisitionId || job.requisitionId,
+    sourceEvidence,
+    verificationEvidence: {
+      ...job.verificationEvidence,
+      detailPageOpened: strongest.detailPageOpened === true,
+      applyRouteAvailable: strongest.applyRouteAvailable === true,
+      expiredIndicatorVisible: strongest.expiredIndicatorVisible === true,
+      unavailableIndicatorVisible: strongest.unavailableIndicatorVisible === true,
+      verifiedAt: strongest.observedAt || job.verificationEvidence?.verifiedAt,
+    },
+  };
 }
 
 function sameRole(left, right) {
@@ -138,7 +198,9 @@ function dateObservations(job, field) {
 }
 
 export function resolveDateEvidence(job, field) {
-  const observations = dateObservations(job, field).filter((entry) => asText(entry?.value));
+  const allObservations = dateObservations(job, field).filter((entry) => asText(entry?.value));
+  const authoritative = allObservations.filter((entry) => ['employer', 'ats'].includes(entry.sourceType));
+  const observations = authoritative.length ? authoritative : allObservations;
   for (const entry of observations) parseDate(entry.value, `${field}.value`);
   const values = [...new Set(observations.map((entry) => entry.value))];
   return {
@@ -173,6 +235,14 @@ function opportunityIdentityKeys(item) {
 
 function requiredString(value, path, errors) {
   if (!asText(value)) errors.push(`${path} is required`);
+}
+
+function validateStringArray(value, path, errors, options = {}) {
+  if (!Array.isArray(value)) { errors.push(`${path} must be an array`); return; }
+  if (options.nonEmpty === true && value.length === 0) errors.push(`${path} must contain at least one value`);
+  value.forEach((entry, index) => {
+    if (typeof entry !== 'string' || !entry.trim()) errors.push(`${path}[${index}] must be a non-empty string`);
+  });
 }
 
 function validateDateEvidence(job, index, errors) {
@@ -260,6 +330,10 @@ export function validateSession(session) {
   if (!Array.isArray(session.leads)) errors.push('leads must be an array');
   if (!Array.isArray(session.relatedOpportunities)) errors.push('relatedOpportunities must be an array');
   if (session.preferences && !['profile', 'criteria', 'combined'].includes(session.preferences.mode)) errors.push('preferences.mode must be profile, criteria, or combined');
+  if (['profile', 'combined'].includes(session.preferences?.mode) && !/^[a-f0-9]{64}$/i.test(asText(session.resumeFingerprint))) {
+    errors.push('resumeFingerprint must be the 64-character SHA-256 of the supplied resume in profile or combined mode');
+  }
+  if (session.preferences?.mode === 'criteria' && asText(session.resumeFingerprint)) errors.push('criteria mode must not include resumeFingerprint');
   if (session.preferences && !Array.isArray(session.preferences.constraints)) errors.push('preferences.constraints must be an array');
   asArray(session.preferences?.constraints).forEach((constraint, index) => {
     requiredString(constraint?.field, `preferences.constraints[${index}].field`, errors);
@@ -348,7 +422,7 @@ export function validateSession(session) {
 
   if (session.candidate) {
     for (const field of ['targetRoleFamilies', 'locations', 'workArrangements', 'domains', 'qualifications']) {
-      if (!Array.isArray(session.candidate[field])) errors.push(`candidate.${field} must be an array`);
+      validateStringArray(session.candidate[field], `candidate.${field}`, errors);
     }
     if (!Array.isArray(session.candidate.skills)) errors.push('candidate.skills must be an array');
     if (!Array.isArray(session.candidate.capabilities)) errors.push('candidate.capabilities must be an array');
@@ -391,18 +465,46 @@ export function validateSession(session) {
     if (!['full-time', 'part-time', 'variable', 'not-stated'].includes(job?.workload)) errors.push(`jobs[${index}].workload is invalid`);
     if (job?.isTechnicalVolunteer !== undefined && typeof job.isTechnicalVolunteer !== 'boolean') errors.push(`jobs[${index}].isTechnicalVolunteer must be boolean`);
     if (job?.compensation && !['paid', 'unpaid', 'reimbursed', 'unknown'].includes(job.compensation.kind)) errors.push(`jobs[${index}].compensation.kind is invalid`);
-    if (!Array.isArray(job?.roleFamilies) || !job.roleFamilies.length) errors.push(`jobs[${index}].roleFamilies must contain at least one duty-derived family`);
-    if (!Array.isArray(job?.responsibilityAreas) || !job.responsibilityAreas.length) errors.push(`jobs[${index}].responsibilityAreas must contain at least one responsibility`);
-    if (!Array.isArray(job?.requiredSkills)) errors.push(`jobs[${index}].requiredSkills must be an array`);
-    if (!Array.isArray(job?.preferredSkills)) errors.push(`jobs[${index}].preferredSkills must be an array`);
-    if (!Array.isArray(job?.requirements)) errors.push(`jobs[${index}].requirements must be an array`);
-    asArray(job?.requiredSkills).forEach((skill, skillIndex) => {
-      if (ELIGIBILITY_REQUIREMENT.test(asText(skill))) errors.push(`jobs[${index}].requiredSkills[${skillIndex}] is an eligibility requirement; move it to requirements`);
+    validateStringArray(job?.roleFamilies, `jobs[${index}].roleFamilies`, errors, { nonEmpty: true });
+    validateStringArray(job?.responsibilityAreas, `jobs[${index}].responsibilityAreas`, errors, { nonEmpty: true });
+    validateStringArray(job?.domains, `jobs[${index}].domains`, errors);
+    validateStringArray(job?.selectionRisks ?? [], `jobs[${index}].selectionRisks`, errors);
+    if (!Array.isArray(job?.technicalRequirements)) errors.push(`jobs[${index}].technicalRequirements must be an array`);
+    asArray(job?.technicalRequirements).forEach((group, groupIndex) => {
+      requiredString(group?.label, `jobs[${index}].technicalRequirements[${groupIndex}].label`, errors);
+      if (!['required', 'preferred', 'exposure'].includes(group?.strength)) errors.push(`jobs[${index}].technicalRequirements[${groupIndex}].strength is invalid`);
+      if (!['any', 'all'].includes(group?.match)) errors.push(`jobs[${index}].technicalRequirements[${groupIndex}].match is invalid`);
+      validateStringArray(group?.options, `jobs[${index}].technicalRequirements[${groupIndex}].options`, errors, { nonEmpty: true });
+      asArray(group?.options).forEach((skill, skillIndex) => {
+        if (ELIGIBILITY_REQUIREMENT.test(asText(skill))) errors.push(`jobs[${index}].technicalRequirements[${groupIndex}].options[${skillIndex}] is an eligibility requirement; move it to requirements`);
+      });
     });
+    if (!Array.isArray(job?.sourceEvidence) || !job.sourceEvidence.length) errors.push(`jobs[${index}].sourceEvidence must contain at least one observed source`);
+    asArray(job?.sourceEvidence).forEach((source, sourceIndex) => {
+      requiredString(source?.name, `jobs[${index}].sourceEvidence[${sourceIndex}].name`, errors);
+      requiredString(source?.url, `jobs[${index}].sourceEvidence[${sourceIndex}].url`, errors);
+      requiredString(source?.observedAt, `jobs[${index}].sourceEvidence[${sourceIndex}].observedAt`, errors);
+      if (source?.observedAt) {
+        try { parseDate(source.observedAt, `jobs[${index}].sourceEvidence[${sourceIndex}].observedAt`); }
+        catch (error) { errors.push(error.message); }
+      }
+      if (!['employer', 'ats', 'job-board', 'aggregator', 'search-result'].includes(source?.kind)) errors.push(`jobs[${index}].sourceEvidence[${sourceIndex}].kind is invalid`);
+      for (const field of ['detailPageOpened', 'applyRouteAvailable', 'expiredIndicatorVisible', 'unavailableIndicatorVisible']) {
+        if (typeof source?.[field] !== 'boolean') errors.push(`jobs[${index}].sourceEvidence[${sourceIndex}].${field} must be boolean`);
+      }
+      for (const field of ['url', 'applicationUrl']) {
+        if (!source?.[field]) continue;
+        try { new URL(source[field]); }
+        catch { errors.push(`jobs[${index}].sourceEvidence[${sourceIndex}].${field} must be an absolute URL`); }
+      }
+    });
+    if (!Array.isArray(job?.requirements)) errors.push(`jobs[${index}].requirements must be an array`);
     asArray(job?.requirements).forEach((requirement, requirementIndex) => {
       requiredString(requirement?.text, `jobs[${index}].requirements[${requirementIndex}].text`, errors);
       if (!['hard', 'preference'].includes(requirement?.strength)) errors.push(`jobs[${index}].requirements[${requirementIndex}].strength is invalid`);
       if (!['met', 'not-met', 'unknown'].includes(requirement?.compatibility)) errors.push(`jobs[${index}].requirements[${requirementIndex}].compatibility is invalid`);
+      if (requirement?.evidenceSource !== undefined && !['resume', 'user-explicit', 'official-document', 'unknown'].includes(requirement.evidenceSource)) errors.push(`jobs[${index}].requirements[${requirementIndex}].evidenceSource is invalid`);
+      if (requirement?.compatibility === 'met' && (!requirement?.evidenceSource || requirement.evidenceSource === 'unknown')) errors.push(`jobs[${index}].requirements[${requirementIndex}] cannot be met without resume, user-explicit, or official-document evidence`);
     });
     validateDateEvidence(job, index, errors);
   });
@@ -477,28 +579,47 @@ function bestSemanticMatch(values, targets) {
 }
 
 export function scoreRoleFit(candidate, job, now = new Date()) {
-  const required = asArray(job.requiredSkills);
-  const preferred = asArray(job.preferredSkills);
   const responsibilities = asArray(job.responsibilityAreas);
   const evidenceItems = [...asArray(candidate.skills), ...asArray(candidate.capabilities)];
   const matchAll = (values) => values.map((name) => ({ name, match: skillMatch(name, evidenceItems, now.getFullYear()) }));
-  const requiredMatches = matchAll(required);
-  const preferredMatches = matchAll(preferred);
   const responsibilityMatches = matchAll(responsibilities);
-  const average = (items, fallback) => items.length ? items.reduce((sum, item) => sum + (item.match?.score ?? 0), 0) / items.length : fallback;
-  const requiredScore = average(requiredMatches, 0.55);
-  const preferredScore = average(preferredMatches, requiredScore);
+  const average = (items, fallback = 0) => items.length ? items.reduce((sum, item) => sum + (item.match?.score ?? 0), 0) / items.length : fallback;
+  const technicalGroups = asArray(job.technicalRequirements).map((group) => {
+    const options = matchAll(group.options);
+    const optionScores = options.map((item) => item.match?.score ?? 0);
+    const score = group.match === 'all'
+      ? (optionScores.length ? optionScores.reduce((sum, value) => sum + value, 0) / optionScores.length : 0)
+      : Math.max(0, ...optionScores);
+    const matched = options.filter((item) => (item.match?.score ?? 0) >= 0.3);
+    const met = group.match === 'all' ? matched.length === options.length : matched.length > 0;
+    return { ...group, score, options, matched, met };
+  });
+  const requiredGroups = technicalGroups.filter((group) => group.strength === 'required');
+  const preferredGroups = technicalGroups.filter((group) => group.strength !== 'required');
+  const requiredScore = requiredGroups.length ? requiredGroups.reduce((sum, group) => sum + group.score, 0) / requiredGroups.length : 0.55;
+  const preferredScore = preferredGroups.length ? preferredGroups.reduce((sum, group) => sum + group.score, 0) / preferredGroups.length : requiredScore;
   const responsibilityScore = average(responsibilityMatches, 0.45);
+  const familyScore = bestSemanticMatch(job.roleFamilies, candidate.targetRoleFamilies);
   const rawScore = requiredScore * 4 + preferredScore + responsibilityScore * 3.5
-    + bestSemanticMatch(job.roleFamilies, candidate.targetRoleFamilies)
-    + bestSemanticMatch(job.domains, candidate.domains) * 0.5;
-  const evidence = [...requiredMatches, ...responsibilityMatches].filter((item) => item.match)
+    + familyScore + bestSemanticMatch(job.domains, candidate.domains) * 0.5;
+  const technicalMatches = technicalGroups.flatMap((group) => group.matched.map((item) => ({ ...item, group })));
+  const evidence = [...technicalMatches, ...responsibilityMatches.filter((item) => item.match)]
     .map((item) => `${item.name}: supported by ${item.match.skill.name} (${item.match.skill.level}${item.match.skill.years ? `, ${item.match.skill.years} years` : ''})`);
-  const gaps = requiredMatches.filter((item) => !item.match).map((item) => item.name);
-  if (!required.length) gaps.push('No concrete required technologies were stated; score relies on responsibilities and transferable capabilities');
-  const noRequiredSkillMatches = required.length > 0 && requiredMatches.every((item) => !item.match);
-  if (noRequiredSkillMatches) gaps.push('No stated required technology is supported by the candidate evidence; role fit is capped below the stretch threshold');
-  return { score: round1(clamp(noRequiredSkillMatches ? Math.min(rawScore, 2.9) : rawScore)), evidence: [...new Set(evidence)], gaps };
+  const gaps = requiredGroups.filter((group) => !group.met).map((group) => `${group.label}: requires ${group.match === 'all' ? 'all of' : 'one of'} ${group.options.map((item) => item.name).join(', ')}`);
+  if (!technicalGroups.length) gaps.push('No concrete technical requirements were stated; assessment relies on responsibilities and transferable capabilities');
+  const coreDutyValue = responsibilityScore * 0.75 + familyScore * 0.25;
+  const coreDutyFit = coreDutyValue >= 0.62 ? 'Strong' : coreDutyValue >= 0.3 ? 'Partial' : 'Low';
+  const metRequiredGroups = requiredGroups.filter((group) => group.met).length;
+  const requiredTechnology = requiredGroups.length === 0 ? 'Unknown'
+    : metRequiredGroups === requiredGroups.length ? 'Met'
+      : technicalGroups.some((group) => group.matched.length) ? 'Partially met' : 'Not met';
+  const noRequiredSkillMatches = requiredGroups.length > 0 && metRequiredGroups === 0;
+  return {
+    score: round1(clamp(noRequiredSkillMatches ? Math.min(rawScore, 2.9) : rawScore)),
+    coreDutyFit, requiredTechnology,
+    technologySummary: { requiredGroups: requiredGroups.length, metRequiredGroups },
+    evidence: [...new Set(evidence)], gaps,
+  };
 }
 
 function scoreCriteriaRole(job, candidate, preferences) {
@@ -508,6 +629,9 @@ function scoreCriteriaRole(job, candidate, preferences) {
   const responsibilityScore = bestSemanticMatch(job.responsibilityAreas, targets);
   return {
     score: round1(clamp(familyScore * 7 + responsibilityScore * 3)),
+    coreDutyFit: familyScore * 0.7 + responsibilityScore * 0.3 >= 0.62 ? 'Strong' : familyScore > 0 || responsibilityScore > 0 ? 'Partial' : 'Low',
+    requiredTechnology: 'Unknown',
+    technologySummary: { requiredGroups: 0, metRequiredGroups: 0 },
     evidence: [...(familyScore > 0 ? ['Duty-derived role family matches the requested role criteria'] : []), ...(responsibilityScore > 0 ? ['Advertised responsibilities overlap the requested criteria'] : [])],
     gaps: targets.length && familyScore === 0 ? ['No duty-derived role family matched the requested criteria'] : [],
   };
@@ -568,6 +692,8 @@ export function scorePracticalFit(candidate, preferences, job) {
   const blockers = [];
   const positives = [];
   const cautions = [];
+  const eligibilityFailures = [];
+  const eligibilityUnknowns = [];
   let score = 0;
   const volunteerRequested = preferences.includeTechnicalVolunteer === true
     || constraintsFor(preferences, 'engagementModel').some((item) => normalise(item.value) === 'volunteer');
@@ -580,9 +706,10 @@ export function scorePracticalFit(candidate, preferences, job) {
     blockers.push(`Engagement model is ${job.engagementModel}, not employee employment`);
   }
   const excludedCoreSkills = constraintsFor(preferences, 'excludeCoreSkill').filter((item) => item.strength === 'hard');
-  for (const requiredSkill of asArray(job.requiredSkills)) {
-    const exclusion = excludedCoreSkills.find((item) => semanticSimilarity(requiredSkill, item.value) >= 0.8);
-    if (exclusion) blockers.push(`Required technology ${requiredSkill} conflicts with explicit core-technology exclusion: ${exclusion.value}`);
+  for (const group of asArray(job.technicalRequirements).filter((item) => item.strength === 'required')) {
+    const conflicts = asArray(group.options).filter((option) => excludedCoreSkills.some((item) => semanticSimilarity(option, item.value) >= 0.8));
+    const blocked = group.match === 'all' ? conflicts.length > 0 : conflicts.length === asArray(group.options).length;
+    if (blocked) blockers.push(`Required technology group ${group.label} conflicts with an explicit core-technology exclusion: ${conflicts.join(', ')}`);
   }
   score += evaluateConstraint(job.programmeType, legacyConstraints(preferences, 'programmeType', preferences.programmeTypes ?? preferences.employmentTypes), 'Programme type', blockers, cautions, positives) * 1.5;
   score += evaluateConstraint(job.contractType, legacyConstraints(preferences, 'contractType', preferences.contractTypes), 'Contract type', blockers, cautions, positives) * 0.75;
@@ -594,31 +721,33 @@ export function scorePracticalFit(candidate, preferences, job) {
   const dates = resolvedJobDates(job);
   const availability = evaluateAvailability(job, candidate, dates);
   if (availability.status === 'compatible') { positives.push(availability.reason); score += 2; }
-  else if (availability.status === 'incompatible') blockers.push(availability.reason);
-  else { cautions.push(availability.reason); score += 0.5; }
+  else if (availability.status === 'incompatible') { blockers.push(availability.reason); eligibilityFailures.push(availability.reason); }
+  else { cautions.push(availability.reason); eligibilityUnknowns.push(availability.reason); score += 0.5; }
   const workRights = evaluateWorkRights(job, candidate, dates);
   if (workRights.status === 'compatible') { positives.push(workRights.reason); score += 2; }
-  else if (workRights.status === 'incompatible') blockers.push(workRights.reason);
-  else { cautions.push(workRights.reason); score += 0.5; }
+  else if (workRights.status === 'incompatible') { blockers.push(workRights.reason); eligibilityFailures.push(workRights.reason); }
+  else { cautions.push(workRights.reason); eligibilityUnknowns.push(workRights.reason); score += 0.5; }
   const requirements = asArray(job.requirements);
-  if (!requirements.length) { cautions.push('No explicit non-technical eligibility requirements were recorded'); score += 0.5; }
+  if (!requirements.length) { cautions.push('No explicit non-technical eligibility requirements were recorded'); eligibilityUnknowns.push('No explicit non-technical eligibility requirements were recorded'); score += 0.5; }
   else {
     const hard = requirements.filter((item) => item.strength === 'hard');
     const failed = hard.filter((item) => item.compatibility === 'not-met');
     const unknown = hard.filter((item) => item.compatibility === 'unknown');
     const met = hard.filter((item) => item.compatibility === 'met');
-    failed.forEach((item) => blockers.push(`Hard requirement not met: ${item.text}`));
-    unknown.forEach((item) => cautions.push(`Hard requirement not verified: ${item.text}`));
+    failed.forEach((item) => { const message = `Hard requirement not met: ${item.text}`; blockers.push(message); eligibilityFailures.push(message); });
+    unknown.forEach((item) => { const message = `Hard requirement not verified: ${item.text}`; cautions.push(message); eligibilityUnknowns.push(message); });
     requirements.filter((item) => item.strength === 'preference' && item.compatibility !== 'met').forEach((item) => cautions.push(`Selection preference: ${item.text}`));
     if (hard.length && met.length === hard.length) { positives.push('All recorded hard eligibility requirements appear met'); score += 1; }
     else if (met.length) score += 0.5;
   }
   for (const risk of asArray(job.selectionRisks)) cautions.push(risk);
   score -= Math.min(2, asArray(job.selectionRisks).length * 0.5);
-  return { score: round1(clamp(score)), blockers: [...new Set(blockers)], positives: [...new Set(positives)], cautions: [...new Set(cautions)] };
+  const eligibility = eligibilityFailures.length ? 'Not met' : eligibilityUnknowns.length ? 'Unknown' : 'Met';
+  return { score: round1(clamp(score)), eligibility, blockers: [...new Set(blockers)], positives: [...new Set(positives)], cautions: [...new Set(cautions)] };
 }
 
 export function classifyVerification(job, preferences, now = new Date()) {
+  job = canonicaliseJobEvidence(job);
   const reasons = [];
   let status = 'verified-active';
   let hostname = '';
@@ -653,29 +782,52 @@ export function classifyVerification(job, preferences, now = new Date()) {
   return { status, reasons: [...new Set(reasons)], dates };
 }
 
-function dedupeKey(job) {
-  if (job.requisitionId) return `req:${normalise(job.employer)}:${normalise(job.requisitionId)}`;
-  const application = normaliseUrl(job.applicationUrl);
-  if (application) return `application:${application}`;
-  return [normalise(job.employer), normalise(job.title), normalise(job.location)].join('|');
-}
 function evidenceStrength(job) {
   const evidence = job.verificationEvidence ?? {};
-  return Number(Boolean(evidence.detailPageOpened)) * 2 + Number(Boolean(evidence.applyRouteAvailable)) * 2
+  return sourceEvidenceRank(bestSourceEvidence(job)) * 10
+    + Number(Boolean(evidence.detailPageOpened)) * 2 + Number(Boolean(evidence.applyRouteAvailable)) * 2
     + Number(Boolean(job.applicationUrl)) + Number(Boolean(job.requisitionId))
     + Object.values(job.dateEvidence ?? {}).flatMap(asArray).filter((entry) => ['employer', 'ats'].includes(entry.sourceType)).length;
 }
-function deduplicate(jobs) {
-  const byKey = new Map();
-  const duplicates = [];
-  for (const job of jobs) {
-    const key = dedupeKey(job);
-    const previous = byKey.get(key);
-    if (!previous) { byKey.set(key, job); continue; }
-    if (evidenceStrength(job) > evidenceStrength(previous)) { duplicates.push({ ...previous, duplicateOf: job.title }); byKey.set(key, job); }
-    else duplicates.push({ ...job, duplicateOf: previous.title });
+function mergeUnique(items, key) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const identity = key(item);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+function mergeJobs(left, right) {
+  const preferred = evidenceStrength(right) > evidenceStrength(left) ? right : left;
+  const secondary = preferred === right ? left : right;
+  const dateEvidence = {};
+  for (const field of ['postedAt', 'closesAt', 'startAt', 'endAt']) {
+    dateEvidence[field] = mergeUnique([
+      ...asArray(preferred.dateEvidence?.[field]), ...asArray(secondary.dateEvidence?.[field]),
+    ], (entry) => `${entry.value}|${normaliseUrl(entry.sourceUrl)}|${entry.sourceType}`);
   }
-  return { unique: [...byKey.values()], duplicates };
+  return canonicaliseJobEvidence({
+    ...preferred,
+    sourceEvidence: mergeUnique([
+      ...asArray(preferred.sourceEvidence), ...asArray(secondary.sourceEvidence),
+    ], (entry) => `${entry.kind}|${normaliseUrl(entry.url)}`),
+    dateEvidence,
+  });
+}
+function deduplicate(jobs) {
+  const retained = [];
+  const duplicates = [];
+  for (const rawJob of jobs) {
+    const job = canonicaliseJobEvidence(rawJob);
+    const keys = new Set(jobIdentityKeys(job));
+    const previousIndex = retained.findIndex((candidate) => jobIdentityKeys(candidate).some((key) => keys.has(key)));
+    if (previousIndex < 0) { retained.push(job); continue; }
+    const previous = retained[previousIndex];
+    duplicates.push({ ...(evidenceStrength(job) > evidenceStrength(previous) ? previous : job), duplicateOf: job.title });
+    retained[previousIndex] = mergeJobs(previous, job);
+  }
+  return { unique: retained, duplicates };
 }
 function classifyRelatedOpportunity(item) {
   const evidence = item.verificationEvidence ?? {};
@@ -692,23 +844,37 @@ function assessmentState(job) {
     dates: Object.fromEntries(Object.entries(job.verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
     programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
     technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
+    technicalRequirements: job.technicalRequirements,
+    strongestSourceKind: bestSourceEvidence(job)?.kind,
   });
+}
+
+function recommendationFor(job, mode) {
+  if (job.verification.status !== 'verified-active') return 'Skip';
+  if (job.practicalFit.blockers.length || job.practicalFit.eligibility === 'Not met') return 'Skip';
+  if (job.roleFit.coreDutyFit === 'Low' || job.roleFit.requiredTechnology === 'Not met') return 'Skip';
+  if (mode === 'criteria') return job.roleFit.coreDutyFit === 'Strong' ? 'Apply' : 'Consider';
+  if (job.roleFit.coreDutyFit === 'Strong' && job.roleFit.requiredTechnology === 'Met' && job.practicalFit.eligibility !== 'Unknown') return 'Apply';
+  return 'Consider';
 }
 
 export function buildReport(session, options = {}) {
   const validation = validateSession(session);
   if (!validation.valid) throw new Error(`Invalid session:\n- ${validation.errors.join('\n- ')}`);
   const now = options.now ? new Date(options.now) : new Date();
+  const scanContext = deriveScanContext(session);
   const coverage = deriveSearchCoverage(session.searchCoverage, session.leads);
   const { unique, duplicates } = deduplicate(session.jobs);
   const evaluated = unique.map((job) => {
     const verification = classifyVerification(job, session.preferences, now);
+    const canonicalJob = canonicaliseJobEvidence(job);
     const result = {
-      ...job,
-      sourceUrl: normaliseUrl(job.sourceUrl), applicationUrl: normaliseUrl(job.applicationUrl), verification,
-      roleFit: session.preferences.mode === 'criteria' ? scoreCriteriaRole(job, session.candidate, session.preferences) : scoreRoleFit(session.candidate, job, now),
-      practicalFit: scorePracticalFit(session.candidate, session.preferences, job),
+      ...canonicalJob,
+      sourceUrl: normaliseUrl(canonicalJob.sourceUrl), applicationUrl: normaliseUrl(canonicalJob.applicationUrl), verification,
+      roleFit: session.preferences.mode === 'criteria' ? scoreCriteriaRole(canonicalJob, session.candidate, session.preferences) : scoreRoleFit(session.candidate, canonicalJob, now),
+      practicalFit: scorePracticalFit(session.candidate, session.preferences, canonicalJob),
     };
+    result.recommendation = recommendationFor(result, session.preferences.mode);
     result.stateFingerprint = assessmentState(result);
     return result;
   });
@@ -720,17 +886,20 @@ export function buildReport(session, options = {}) {
       roleFit: session.preferences.mode === 'criteria' ? scoreCriteriaRole(job, session.candidate, session.preferences) : scoreRoleFit(session.candidate, job, now),
       practicalFit: scorePracticalFit(session.candidate, session.preferences, job),
     };
+    result.recommendation = 'Skip';
     result.stateFingerprint = assessmentState(result);
     evaluated.push(result);
   }
-  const noBlockers = (job) => job.practicalFit.blockers.length === 0 && job.practicalFit.score >= 5;
+  const noBlockers = (job) => job.practicalFit.blockers.length === 0;
   const verifiedEligible = evaluated.filter((job) => job.verification.status === 'verified-active' && noBlockers(job));
-  const recommended = verifiedEligible.filter((job) => job.roleFit.score >= 5);
-  const stretch = verifiedEligible.filter((job) => job.roleFit.score >= 3 && job.roleFit.score < 5);
-  const manualVerification = evaluated.filter((job) => session.preferences.includeUnverified !== false && job.verification.status === 'unverified' && noBlockers(job) && job.roleFit.score >= 5);
+  const recommended = verifiedEligible.filter((job) => job.recommendation === 'Apply');
+  const stretch = verifiedEligible.filter((job) => job.recommendation === 'Consider');
+  const manualVerification = evaluated.filter((job) => session.preferences.includeUnverified !== false
+    && job.verification.status === 'unverified' && noBlockers(job)
+    && job.roleFit.coreDutyFit !== 'Low' && job.roleFit.requiredTechnology !== 'Not met');
   const closed = evaluated.filter((job) => ['closed', 'unavailable'].includes(job.verification.status));
   const incompatible = evaluated.filter((job) => job.verification.status === 'verified-active' && job.practicalFit.blockers.length > 0);
-  const lowFit = evaluated.filter((job) => job.verification.status === 'verified-active' && noBlockers(job) && job.roleFit.score < 3);
+  const lowFit = evaluated.filter((job) => job.verification.status === 'verified-active' && noBlockers(job) && job.recommendation === 'Skip');
   const classified = new Set([...recommended, ...stretch, ...manualVerification, ...closed, ...incompatible, ...lowFit]);
   const otherUnverified = evaluated.filter((job) => !classified.has(job));
   const sortFit = (a, b) => (b.roleFit.score + b.practicalFit.score) - (a.roleFit.score + a.practicalFit.score);
@@ -749,6 +918,7 @@ export function buildReport(session, options = {}) {
   }));
   return {
     pluginVersion: session.pluginVersion, sessionSchemaVersion: session.sessionSchemaVersion,
+    scanContext,
     generatedAt: now.toISOString(), candidate: session.candidate, preferences: session.preferences,
     searchCoverage: coverage, assumptions: asArray(session.assumptions), leads: asArray(session.leads),
     searchedCount: options.searchedCount ?? session.jobs.length,
@@ -789,7 +959,9 @@ function renderJobDetails(job, heading) {
     `- Programme: ${job.programmeType}; contract: ${job.contractType}; workload: ${job.workload}; ${job.engagementModel ?? 'engagement model not stated'}${job.isTechnicalVolunteer ? ' (technical volunteer)' : ''}`,
     `- Compensation: ${job.compensation ? `${job.compensation.kind}${job.compensation.detail ? ` — ${job.compensation.detail}` : ''}` : 'not stated'}`,
     `- ${dateSummary(job)}`, `- Verified: ${job.verificationEvidence.verifiedAt}`,
-    `- Role fit: ${job.roleFit.score}/10`, `- Practical fit: ${job.practicalFit.score}/10`,
+    `- Primary evidence: ${bestSourceEvidence(job)?.kind ?? 'unknown'}; observed sources: ${asArray(job.sourceEvidence).map((item) => `${item.name} (${item.kind})`).join(', ')}`,
+    `- Recommendation: ${job.recommendation}`, `- Core duty fit: ${job.roleFit.coreDutyFit}`,
+    `- Required technology: ${job.roleFit.requiredTechnology}`, `- Eligibility: ${job.practicalFit.eligibility}`,
     `- Link: ${job.applicationUrl || job.sourceUrl}`, '',
     '**Evidence of fit**', '', bulletList(job.roleFit.evidence), '',
     '**Technical gaps / cautions**', '', bulletList(job.roleFit.gaps), '',
@@ -800,11 +972,11 @@ function renderJobDetails(job, heading) {
 function table(items, fitLabel = 'Role fit') {
   if (!items.length) return [];
   return [
-    `| Role | Company | Location / arrangement | Engagement / pay | ${fitLabel} | Practical fit | Direct link |`, '|---|---|---|---|---:|---:|---|',
+    `| Role | Company | Location / arrangement | Engagement / pay | Recommendation | ${fitLabel} | Required technology | Eligibility | Direct link |`, '|---|---|---|---|---|---|---|---|---|',
     ...items.map((job) => {
       const engagement = job.isTechnicalVolunteer ? 'Volunteer' : (job.engagementModel ?? 'Not stated');
       const pay = job.compensation?.kind ?? 'not stated';
-      return `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location} / ${job.workArrangement ?? '-'}`)} | ${escapeCell(`${engagement} / ${pay}`)} | ${job.roleFit.score}/10 | ${job.practicalFit.score}/10 | [Open listing](${job.applicationUrl || job.sourceUrl}) |`;
+      return `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location} / ${job.workArrangement ?? '-'}`)} | ${escapeCell(`${engagement} / ${pay}`)} | ${job.recommendation} | ${job.roleFit.coreDutyFit} | ${job.roleFit.requiredTechnology} | ${job.practicalFit.eligibility} | [Open listing](${job.applicationUrl || job.sourceUrl}) |`;
     }), '',
   ];
 }
@@ -816,6 +988,7 @@ export function renderMarkdown(report) {
   const lines = [
     '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`,
     `Plugin version: ${report.pluginVersion}`, `Session schema: ${report.sessionSchemaVersion}`, '',
+    `<!-- nz-job-scout:context ${JSON.stringify(report.scanContext)} -->`, '',
     '## Search criteria', '', `- Mode: ${report.preferences.mode}`, `- Posting age: ${report.preferences.maxPostingAgeDays ?? 30} days`,
     `- Leads discovered: ${coverage.leadsDiscovered}`, `- Detail pages opened: ${coverage.detailPagesOpened}`,
     `- Listings assessed with evidence: ${report.searchedCount}`, `- Search families: ${coverage.searchFamilies.join(', ')}`,
@@ -850,7 +1023,7 @@ export function renderMarkdown(report) {
   if (!report.manualVerification.length && !report.unresolvedHighValueLeads.length) lines.push('- None', '');
   else {
     lines.push('> These leads match the requested profile, but the exact public detail page, application route, posting date, or conflicting evidence prevented verification. They are not counted as recommendations.', '');
-    for (const job of report.manualVerification) lines.push(`- **${job.title} — ${job.employer}** (${fitLabel} ${job.roleFit.score}/10; practical fit ${job.practicalFit.score}/10): ${job.verification.reasons.join('; ')}. [Discovery source](${job.sourceUrl})`);
+    for (const job of report.manualVerification) lines.push(`- **${job.title} — ${job.employer}** (core duties ${job.roleFit.coreDutyFit}; required technology ${job.roleFit.requiredTechnology}; eligibility ${job.practicalFit.eligibility}): ${job.verification.reasons.join('; ')}. [Discovery source](${job.sourceUrl})`);
     for (const lead of report.unresolvedHighValueLeads) lines.push(`- **${lead.title} — ${lead.employer}** (unresolved ${lead.status}; primary source ${lead.directSourceStatus}): ${lead.reason}. [Discovery source](${lead.url})`);
     lines.push('');
   }
@@ -862,7 +1035,7 @@ export function renderMarkdown(report) {
     if (!items.length) lines.push('- None', '');
     else {
       for (const job of items) {
-        const reasons = [...job.verification.reasons, ...job.practicalFit.blockers, ...(job.roleFit.score < 3 ? [`Role fit ${job.roleFit.score}/10 is below the stretch threshold`] : [])];
+        const reasons = [...job.verification.reasons, ...job.practicalFit.blockers, ...(job.roleFit.coreDutyFit === 'Low' ? ['Core day-to-day duties have low overlap with the candidate evidence'] : []), ...(job.roleFit.requiredTechnology === 'Not met' ? ['No required technology group is supported by candidate evidence'] : [])];
         lines.push(`- **${job.title} — ${job.employer}** (${job.verification.status}): ${[...new Set(reasons)].join('; ') || 'Not recommended after ranking'}. [Source](${job.sourceUrl})`);
       }
       lines.push('');
@@ -886,7 +1059,9 @@ export function renderMarkdown(report) {
 }
 
 export function renderIncrementalMarkdown(report) {
-  const body = renderMarkdown(report).trimEnd().split('\n').slice(4).map((line) => line.startsWith('### ') ? `#### ${line.slice(4)}` : line.startsWith('## ') ? `### ${line.slice(3)}` : line);
+  const rendered = renderMarkdown(report).trimEnd().split('\n');
+  const start = rendered.findIndex((line) => line === '## Search criteria');
+  const body = rendered.slice(start >= 0 ? start : 0).map((line) => line.startsWith('### ') ? `#### ${line.slice(4)}` : line.startsWith('## ') ? `### ${line.slice(3)}` : line);
   return ['---', '', `## Incremental scan — ${formatAucklandTime(report.generatedAt)}`, '', ...body, ''].join('\n');
 }
 
@@ -911,7 +1086,7 @@ export function extractReportHistory(markdown) {
       if (cells.length >= 3 && normalise(cells[0]) !== 'role') legacyIdentities.add(`role:${normalise(cells[1])}|${normalise(cells[0])}|${normalise(cells[2].split(' / ')[0])}`);
     }
   }
-  return { states, legacyIdentities };
+  return { states, legacyIdentities, context: parseContextMarker(markdown) };
 }
 async function readTextIfPresent(path) {
   try { return await readFile(path, 'utf8'); }
@@ -950,7 +1125,7 @@ function applyProjectExclusions(session, state) {
     && !removedJobs.some((job) => leadMatchesJob(lead, job)));
   return { session: { ...session, jobs, leads }, excludedCount: removedJobs.length + (asArray(session.leads).length - leads.length) };
 }
-async function loadReportHistory(outputPath, now, maxPostingAgeDays) {
+async function loadReportHistory(outputPath, now, maxPostingAgeDays, expectedContext) {
   const target = resolve(outputPath);
   const folder = dirname(target);
   const today = aucklandDateKey(now);
@@ -966,11 +1141,16 @@ async function loadReportHistory(outputPath, now, maxPostingAgeDays) {
   const states = new Map();
   const legacyIdentities = new Set();
   let currentMarkdown;
+  let targetContextMismatch = false;
   for (const path of paths) {
     const markdown = await readTextIfPresent(path);
     if (markdown === undefined) continue;
-    if (path === target) currentMarkdown = markdown;
     const extracted = extractReportHistory(markdown);
+    if (extracted.context?.scanContextFingerprint !== expectedContext.scanContextFingerprint) {
+      if (path === target) targetContextMismatch = true;
+      continue;
+    }
+    if (path === target) currentMarkdown = markdown;
     for (const [identity, fingerprints] of extracted.states) {
       const records = states.get(identity) ?? new Set();
       fingerprints.forEach((value) => records.add(value));
@@ -978,15 +1158,18 @@ async function loadReportHistory(outputPath, now, maxPostingAgeDays) {
     }
     extracted.legacyIdentities.forEach((identity) => legacyIdentities.add(identity));
   }
-  return { states, legacyIdentities, currentMarkdown };
+  return { states, legacyIdentities, currentMarkdown, targetContextMismatch };
 }
 function rawJobState(job, preferences, now) {
+  job = canonicaliseJobEvidence(job);
   const verification = classifyVerification(job, preferences, now);
   return fingerprint({
     status: verification.status, reasons: verification.reasons, sourceUrl: normaliseUrl(job.sourceUrl), applicationUrl: normaliseUrl(job.applicationUrl), requisitionId: job.requisitionId,
     dates: Object.fromEntries(Object.entries(verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
     programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
     technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
+    technicalRequirements: job.technicalRequirements,
+    strongestSourceKind: bestSourceEvidence(job)?.kind,
   });
 }
 function filterHistoricalItems(items, history, identityFunction, fingerprintFunction) {
@@ -1027,8 +1210,13 @@ export async function writeReport(inputPath, outputPath, options = {}) {
   const exclusions = applyProjectExclusions(session, state);
   const activeSession = exclusions.session;
   const now = options.now ? new Date(options.now) : new Date();
-  const target = resolve(outputPath);
-  const history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays);
+  const scanContext = deriveScanContext(activeSession);
+  let target = resolve(outputPath);
+  let history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays, scanContext);
+  if (history.targetContextMismatch) {
+    target = target.replace(/\.md$/i, `-${scanContext.scanContextFingerprint.slice(0, 8)}.md`);
+    history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays, scanContext);
+  }
   const jobs = filterHistoricalItems(activeSession.jobs, history, jobIdentityKeys, (job) => rawJobState(job, activeSession.preferences, now));
   const opportunities = filterHistoricalItems(activeSession.relatedOpportunities, history, opportunityIdentityKeys, (item) => fingerprint({
     registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt,
@@ -1050,6 +1238,7 @@ export async function writeReport(inputPath, outputPath, options = {}) {
   });
   report.excludedByProjectState = exclusions.excludedCount;
   report.newListingsCount = jobs.fresh.length;
+  report.outputPath = target;
   await mkdir(dirname(target), { recursive: true });
   const newItems = jobs.fresh.length + opportunities.fresh.length;
   if (history.currentMarkdown !== undefined) {
@@ -1093,10 +1282,10 @@ export async function runCli(argv = process.argv.slice(2)) {
     if (args.command === 'report') {
       const output = resolveReportOutput(args.output, { allowCustomOutput: args.allowCustomOutput === true });
       const report = await writeReport(args.input, output);
-      if (report.writeAction === 'unchanged') console.log(`No new or changed items; existing report left unchanged: ${output} (${report.excludedPreviouslyReported} unchanged item(s))`);
+      if (report.writeAction === 'unchanged') console.log(`No new or changed items; existing report left unchanged: ${report.outputPath} (${report.excludedPreviouslyReported} unchanged item(s))`);
       else {
         const action = report.writeAction === 'appended' ? 'updated incrementally' : 'created';
-        console.log(`Report ${action}: ${output} (${report.recommended.length} recommendation(s), ${report.stretch.length} stretch, ${report.manualVerification.length + report.unresolvedHighValueLeads.length} manual-verification lead(s), ${report.updatedListingsCount} updated)`);
+        console.log(`Report ${action}: ${report.outputPath} (${report.recommended.length} recommendation(s), ${report.stretch.length} consider, ${report.manualVerification.length + report.unresolvedHighValueLeads.length} manual-verification lead(s), ${report.updatedListingsCount} updated)`);
       }
       return 0;
     }

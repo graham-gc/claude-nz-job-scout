@@ -16,8 +16,9 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.6.0",
-  "sessionSchemaVersion": 3,
+  "pluginVersion": "0.7.0",
+  "sessionSchemaVersion": 4,
+  "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
     "name": "Example Candidate",
     "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
@@ -282,14 +283,18 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "roleFamilies": ["software test engineering", "backend engineering"],
       "responsibilityAreas": ["API test automation", "backend debugging", "test framework development"],
       "domains": ["software quality", "developer productivity"],
-      "requiredSkills": ["Java", "API automation"],
-      "preferredSkills": ["SQL"],
+      "technicalRequirements": [
+        { "label": "Backend language", "strength": "required", "match": "any", "options": ["Java"] },
+        { "label": "API automation", "strength": "required", "match": "any", "options": ["API automation"] },
+        { "label": "Data tooling", "strength": "preferred", "match": "any", "options": ["SQL"] }
+      ],
       "requirements": [
         {
           "category": "study",
           "text": "Currently studying at a New Zealand tertiary institution",
           "strength": "hard",
           "compatibility": "met",
+          "evidenceSource": "resume",
           "sourceUrl": "https://careers.example.com/jobs/NZ-101"
         }
       ],
@@ -335,6 +340,20 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         ]
       },
       "selectionRisks": [],
+      "sourceEvidence": [
+        {
+          "name": "Employer careers site",
+          "url": "https://careers.example.com/jobs/NZ-101",
+          "kind": "employer",
+          "detailPageOpened": true,
+          "applyRouteAvailable": true,
+          "expiredIndicatorVisible": false,
+          "unavailableIndicatorVisible": false,
+          "observedAt": "2026-09-01T09:00:00+12:00",
+          "applicationUrl": "https://careers.example.com/jobs/NZ-101/apply",
+          "requisitionId": "NZ-101"
+        }
+      ],
       "verificationEvidence": {
         "detailPageOpened": true,
         "applyRouteAvailable": true,
@@ -384,6 +403,9 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 - compensation kind: `paid`, `unpaid`, `reimbursed`, `unknown`;
 - requirement strength: `hard`, `preference`;
 - requirement compatibility: `met`, `not-met`, `unknown`;
+- technical requirement strength: `required`, `preferred`, `exposure`;
+- technical requirement matching: `any`, `all`;
+- vacancy evidence source kind: `employer`, `ats`, `job-board`, `aggregator`, `search-result`;
 - attempt status: `searched`, `discovery-only`, `blocked`, `unavailable`, `skipped`;
 - lead status: `assessed`, `duplicate`, `blocked`, `not-opened`, `out-of-scope`, `previously-reported`;
 - opportunity status: `open`, `closed`, `conditional`, `unknown`.
@@ -393,6 +415,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 ### Candidate and preferences
 
 - Determine depth from repeated duties, duration, recency, ownership, and outcomes—not keyword count.
+- In `profile` and `combined` modes, include the 64-character SHA-256 of the resume as `resumeFingerprint`. Re-read and re-hash the supplied resume every run. In `criteria` mode, omit it.
 - Keep qualifications and work rights separate from technical skills.
 - Preserve visa wording exactly; temporary or hour-limited rights are not unrestricted. Set `evidenceSource` and leave rights unknown unless the user, CV, or an official document supplies them.
 - Availability uses explicit date windows and maximum weekly hours. Do not replace this with a vague sentence.
@@ -414,10 +437,11 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ### Jobs and dates
 
-- `sourceUrl` is the exact detail page actually opened; `applicationUrl` is the direct application destination.
+- `sourceEvidence[]` records every observed source. Employer and ATS sources outrank job boards, search results, and aggregators. `sourceUrl` and `applicationUrl` identify the strongest observed primary evidence and direct destination.
 - Derive role families and responsibilities from daily duties, not title alone.
-- Put technical requirements in `requiredSkills`/`preferredSkills`; put study, degree, work-right, citizenship, availability, security, and export-control rules in `requirements`.
+- Put technical requirements in structured `technicalRequirements[]` groups. Use `any` for alternatives and `all` only when every option is required. Put study, degree, work-right, citizenship, availability, security, and export-control rules in `requirements`.
 - A hard `not-met` requirement is a blocker. A hard `unknown` requirement is a caution requiring manual confirmation. A preference does not become a hard blocker.
+- A requirement can be `met` only with `resume`, `user-explicit`, or `official-document` evidence. Unsupported final-year, work-right, sponsorship, grade, availability, and transcript assumptions remain `unknown`.
 - Record programme, contract, and workload independently. A full-time fixed-term summer internship remains an internship.
 - A volunteer role is eligible only when the user requested technical volunteering and the session sets `engagementModel: "volunteer"` and `isTechnicalVolunteer: true`. Record its compensation status explicitly; it is not employee employment.
 - Dates use ISO 8601. Use `YYYY-MM-DD` when only a date is visible. A date-only closing deadline remains open through that entire `Pacific/Auckland` calendar day.
@@ -434,6 +458,6 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 ### Privacy and history
 
 - Never record credentials, cookies, tokens, private browser state, or unrelated personal data.
-- Generated reports contain hidden non-sensitive identity/state markers. The runtime uses them to suppress unchanged roles and to re-report materially changed evidence as `Updated evidence`.
+- Generated reports contain hidden non-sensitive identity/state and scan-context markers. The runtime deduplicates only within the same resume/criteria context, suppresses unchanged roles, and re-reports materially changed evidence as `Updated evidence`.
 - Do not delete or edit those markers manually when incremental reporting is desired.
 - User decisions belong in the ignored project-local `.nz-job-scout-state.json`; see [state-file.md](state-file.md). Verification timestamps alone do not make an unchanged opportunity new.
