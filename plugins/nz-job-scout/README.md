@@ -2,7 +2,7 @@
 
 This directory is the installable Claude Code plugin.
 
-The skill orchestrates CV reading and auditable research across anonymously accessible employer, ATS, and permitted public job pages. Its bundled `bin/nz-job-scout` command uses only Node.js built-ins to validate evidence provenance, derive search coverage, resolve date conflicts, classify eligibility, state-deduplicate listings, calculate depth-aware role and practical scores, and generate Markdown. No package installation is required by plugin users.
+The skill orchestrates CV reading and auditable research across anonymously accessible employer, ATS, and permitted public job pages. Its bundled `bin/nz-job-scout` command uses only Node.js built-ins to query supported public ATS inventories, validate evidence provenance, preserve source precedence, derive search coverage, resolve date conflicts, classify eligibility, context-deduplicate listings, calculate explainable fit categories, and generate Markdown. No package installation is required by plugin users.
 
 Development commands:
 

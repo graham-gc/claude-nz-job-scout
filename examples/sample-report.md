@@ -1,6 +1,10 @@
 # New Zealand Job Scout Report
 
 Generated: 2 Sept 2026, 10:29:20 am NZST (Pacific/Auckland)
+Plugin version: 0.7.0
+Session schema: 4
+
+<!-- nz-job-scout:context {"mode":"profile","resumeFingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","criteriaFingerprint":"example","scanContextFingerprint":"example"} -->
 
 ## Search criteria
 
@@ -34,17 +38,21 @@ Generated: 2 Sept 2026, 10:29:20 am NZST (Pacific/Auckland)
 
 ## Verified recommendations
 
-| Role | Company | Location / arrangement | Role fit | Practical fit | Direct link |
-|---|---|---|---:|---:|---|
-| Software Test Engineer Intern | Example Engineering | Auckland / hybrid | 7.3/10 | 8.5/10 | [Open listing](https://careers.example.com/jobs/NZ-101/apply) |
+| Role | Company | Location / arrangement | Engagement / pay | Recommendation | Role fit | Required technology | Eligibility | Direct link |
+|---|---|---|---|---|---|---|---|---|
+| Software Test Engineer Intern | Example Engineering | Auckland / hybrid | employee / paid | Apply | Strong | Met | Met | [Open listing](https://careers.example.com/jobs/NZ-101/apply) |
 
 ### 1. Software Test Engineer Intern — Example Engineering
 
 - Programme: internship; contract: fixed-term; workload: full-time; employee
+- Compensation: paid — Hourly rate stated on the vacancy
 - Posted: 2026-08-25; closes: 2026-09-30
 - Verified: 2026-09-01T09:00:00+12:00
-- Role fit: 7.3/10
-- Practical fit: 8.5/10
+- Primary evidence: employer; observed sources: Employer careers site (employer)
+- Recommendation: Apply
+- Core duty fit: Strong
+- Required technology: Met
+- Eligibility: Met
 - Link: https://careers.example.com/jobs/NZ-101/apply
 
 **Evidence of fit**

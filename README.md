@@ -2,18 +2,22 @@
 
 A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
 
-> Status: **0.6.0 alpha — evidence-backed public-source search with stronger integrity checks.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates the evidence funnel, source inventories, work-right claims, persistent exclusions, URL identity, dates, ranking, and report output. Coverage remains limited to the public sources actually completed in each run.
+> Status: **0.7.0 alpha — context-safe evidence matching with public ATS adapters.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates the evidence funnel, source precedence, structured technical alternatives, resume/search context, work-right claims, persistent exclusions, dates, recommendations, and report output. Coverage remains limited to the public sources actually completed in each run.
 
 ## What works now
 
 - reads a local Markdown or PDF CV through Claude;
+- re-reads and fingerprints the supplied resume on every run rather than persisting a global candidate profile;
 - models skill depth as core, frequent, working, or exposure;
 - separates concrete technologies, sustained work capabilities, and formal eligibility requirements;
 - automatically supports CV-driven, criteria-only, and combined searches;
 - uses only job information available without authentication or private credentials;
 - requires the exact vacancy page and application route to be observed;
 - rejects expired, stale, duplicate, aggregator-only, and practically incompatible roles;
-- scores role fit separately from employment, location, availability, and work-right fit;
+- reports explainable Core duty, Required technology, Eligibility, and Apply/Consider/Skip outcomes instead of a pseudo-precise public score;
+- models “one of” and “all of” technology requirements without turning alternatives into separate mandatory skills;
+- preserves multiple vacancy sources and prevents a board, snippet, or aggregator from downgrading stronger employer/ATS evidence;
+- includes anonymous public ATS inventory adapters for Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday sites;
 - keeps evidence-backed recommendations separate from lower-alignment stretch roles;
 - records each search attempt and every discovered lead, including blocked and rejected leads;
 - uses broad discovery plus source-inventory scans instead of trying to enumerate every possible title-and-skill query;
@@ -29,7 +33,7 @@ A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, 
 - blocks roles whose required core technology conflicts with an explicit candidate exclusion;
 - preserves conflicting date evidence instead of silently choosing one date;
 - separates jobs from events, talent pools, and conditional recruitment programmes;
-- incrementally re-reports a role when its dates, availability, requirements, or verification state change;
+- incrementally re-reports a role when its dates, availability, requirements, or verification state change, but never mixes different resumes or criteria in one report;
 - saves a structured Markdown report.
 - prints the plugin and evidence-schema versions in every report so stale installed copies are visible.
 - writes reports to the current project's `output/` directory by default and rejects accidental root-level output unless the user explicitly authorises a custom location.
@@ -44,7 +48,7 @@ The default posting window is 30 days and can be overridden.
 
 ## Personal search state
 
-Version 0.6.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
+Version 0.7.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
 
 The file is ignored by Git and is not included in the marketplace package. It contains no credentials or browser state.
 
@@ -141,8 +145,8 @@ Replace `<absolute-path-to-your-resume>` with the path to the user's own local r
 
 ## How it works
 
-1. Claude infers the search mode from the supplied resume and/or criteria, then models the candidate when a resume is available.
-2. Claude discovers and opens anonymously accessible employer, ATS, and permitted public job pages.
+1. Claude infers the search mode, re-reads the supplied resume when present, fingerprints that file, and models the candidate from that invocation only.
+2. Claude discovers and opens anonymously accessible employer, ATS, and permitted public job pages, using bundled ATS inventory adapters where supported.
 3. Claude records the search funnel, evidence provenance, and assessed vacancies in a temporary session JSON.
 4. `nz-job-scout` validates, resolves evidence, filters, state-deduplicates, scores, and writes the report.
 5. Claude returns the report path and explains the strongest matches and blockers.
@@ -151,7 +155,7 @@ Everything needed at runtime is included in the plugin. Users do **not** need to
 
 ## Reliability policy
 
-A recommended listing must have a directly opened job-detail page, no visible expired state, a working application route or current application instructions, a posting date inside the requested window, and a verification timestamp. Aggregators can be used only to discover leads; they cannot be final evidence.
+A recommended listing must have a directly opened job-detail page, no visible expired state, a working application route or current application instructions, a posting date inside the requested window, and a verification timestamp. Aggregators can be used only to discover leads; they cannot be final evidence or override a stronger employer/ATS record.
 
 ## A job board blocks anonymous access
 
@@ -175,6 +179,7 @@ plugins/nz-job-scout/.claude-plugin/         Plugin manifest
 plugins/nz-job-scout/skills/                 Skill and evidence contract
 plugins/nz-job-scout/bin/                    Installed command
 plugins/nz-job-scout/runtime/                Generated zero-dependency report runtime
+plugins/nz-job-scout/src/providers/          Public ATS inventory adapters
 plugins/nz-job-scout/src/runtime/            Canonical TypeScript runtime source
 plugins/nz-job-scout/src/                    Supporting typed development modules
 plugins/nz-job-scout/tests/                  Unit and runtime tests

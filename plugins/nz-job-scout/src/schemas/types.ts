@@ -7,6 +7,9 @@ export type ConstraintStrength = 'hard' | 'soft';
 export type ConstraintSource = 'user-explicit' | 'conversation-context' | 'resume-inferred' | 'skill-default';
 export type RequirementStrength = 'hard' | 'preference';
 export type Compatibility = 'met' | 'not-met' | 'unknown';
+export type TechnicalRequirementStrength = 'required' | 'preferred' | 'exposure';
+export type TechnicalRequirementMatch = 'any' | 'all';
+export type EvidenceSourceKind = 'employer' | 'ats' | 'job-board' | 'aggregator' | 'search-result';
 
 export interface CandidateSkill {
   name: string;
@@ -94,7 +97,30 @@ export interface JobRequirement {
   text: string;
   strength: RequirementStrength;
   compatibility: Compatibility;
+  evidenceSource?: 'resume' | 'user-explicit' | 'official-document' | 'unknown';
   sourceUrl?: string;
+}
+
+export interface TechnicalRequirementGroup {
+  label: string;
+  strength: TechnicalRequirementStrength;
+  match: TechnicalRequirementMatch;
+  options: string[];
+  sourceUrl?: string;
+}
+
+export interface JobSourceEvidence {
+  name: string;
+  url: string;
+  kind: EvidenceSourceKind;
+  detailPageOpened: boolean;
+  applyRouteAvailable: boolean;
+  expiredIndicatorVisible: boolean;
+  unavailableIndicatorVisible: boolean;
+  observedAt: string;
+  applicationUrl?: string;
+  requisitionId?: string;
+  note?: string;
 }
 
 export interface VerificationEvidence {
@@ -130,8 +156,8 @@ export interface JobPosting {
   roleFamilies: string[];
   responsibilityAreas: string[];
   domains: string[];
-  requiredSkills: string[];
-  preferredSkills: string[];
+  technicalRequirements: TechnicalRequirementGroup[];
+  sourceEvidence: JobSourceEvidence[];
   requirements: JobRequirement[];
   workRightsRequirement?: {
     country?: string;
@@ -189,6 +215,8 @@ export interface RelatedOpportunity {
 export interface ScoutSession {
   pluginVersion: string;
   sessionSchemaVersion: number;
+  /** SHA-256 of the supplied resume file. Required in profile and combined modes. */
+  resumeFingerprint?: string;
   candidate: CandidateProfile;
   preferences: SearchPreferences;
   searchCoverage: {

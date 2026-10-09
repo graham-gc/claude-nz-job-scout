@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
 import { runCli } from '../runtime/scout.mjs';
+import { runInventoryCli } from '../runtime/provider.mjs';
 
-await runCli();
+if (process.argv[2] === 'inventory') {
+  try { await runInventoryCli(process.argv.slice(3)); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+} else await runCli();

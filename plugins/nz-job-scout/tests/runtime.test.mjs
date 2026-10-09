@@ -15,8 +15,10 @@ import {
   validateSession,
   writeReport,
 } from '../runtime/scout.mjs';
+import { discoverPublicAtsJobs } from '../runtime/provider.mjs';
 
 const verifiedAt = '2026-09-01T09:00:00+12:00';
+const resumeFingerprint = 'a'.repeat(64);
 const candidate = {
   name: 'Test Candidate',
   targetRoleFamilies: ['Software Test Engineer', 'Java Backend'],
@@ -66,9 +68,12 @@ function activeJob(overrides = {}) {
     roleFamilies: ['software test engineering', 'backend engineering'],
     responsibilityAreas: ['API test automation', 'test framework development', 'backend debugging'],
     domains: ['test automation', 'developer productivity'],
-    requiredSkills: ['Java', 'API automation'],
-    preferredSkills: ['Spring Boot'],
-    requirements: [{ category: 'study', text: 'Currently studying at a New Zealand tertiary institution', strength: 'hard', compatibility: 'met' }],
+    technicalRequirements: [
+      { label: 'Backend language', strength: 'required', match: 'any', options: ['Java'] },
+      { label: 'API automation', strength: 'required', match: 'any', options: ['API automation'] },
+      { label: 'Backend framework', strength: 'preferred', match: 'any', options: ['Spring Boot'] },
+    ],
+    requirements: [{ category: 'study', text: 'Currently studying at a New Zealand tertiary institution', strength: 'hard', compatibility: 'met', evidenceSource: 'resume' }],
     workRightsRequirement: { country: 'New Zealand', requiresCurrentRights: true, requiresUnrestricted: false },
     dateEvidence: {
       postedAt: [observation('2026-08-25')],
@@ -82,6 +87,12 @@ function activeJob(overrides = {}) {
       expiredIndicatorVisible: false, unavailableIndicatorVisible: false,
       verifiedAt, notes: [],
     },
+    sourceEvidence: [{
+      name: 'Employer careers site', url: 'https://careers.example.com/jobs/NZ-101?tracking=test',
+      applicationUrl: 'https://careers.example.com/jobs/NZ-101/apply', requisitionId: 'NZ-101', kind: 'employer',
+      detailPageOpened: true, applyRouteAvailable: true, expiredIndicatorVisible: false,
+      unavailableIndicatorVisible: false, observedAt: verifiedAt,
+    }],
     ...overrides,
   };
 }
@@ -99,8 +110,9 @@ function leadFor(job, overrides = {}) {
 function session(jobs = [activeJob()], overrides = {}) {
   const leads = jobs.map((job) => leadFor(job));
   return {
-    pluginVersion: '0.6.0',
-    sessionSchemaVersion: 3,
+    pluginVersion: '0.7.0',
+    sessionSchemaVersion: 4,
+    resumeFingerprint,
     candidate: structuredClone(candidate),
     preferences: {
       mode: 'profile', maxPostingAgeDays: 30, includeUnverified: true,
@@ -147,7 +159,7 @@ test('validates the structured evidence session', () => {
 test('rejects stale sessions and incomplete programme-first plans', () => {
   const stale = session();
   stale.pluginVersion = '0.5.1';
-  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.6\.0/);
+  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.7\.0/);
 
   const missingProgrammePlan = session();
   missingProgrammePlan.searchCoverage.sourceTargets = missingProgrammePlan.searchCoverage.sourceTargets.filter((target) => target.purpose !== 'programme-inventory');
@@ -270,7 +282,10 @@ test('requires expansion of a relevant employer discovered outside its inventory
 });
 
 test('separates high-value unverified leads from verified recommendations', () => {
-  const job = activeJob({ verificationEvidence: { ...activeJob().verificationEvidence, detailPageOpened: false } });
+  const job = activeJob({
+    verificationEvidence: { ...activeJob().verificationEvidence, detailPageOpened: false },
+    sourceEvidence: [{ ...activeJob().sourceEvidence[0], detailPageOpened: false }],
+  });
   const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
   assert.equal(report.recommended.length, 0);
   assert.equal(report.manualVerification.length, 1);
@@ -291,7 +306,10 @@ test('lists recruitment programmes separately from job recommendations', () => {
 });
 
 test('does not treat Java as JavaScript evidence', () => {
-  const job = activeJob({ requiredSkills: ['JavaScript'], roleFamilies: ['frontend engineering'], responsibilityAreas: ['frontend development'] });
+  const job = activeJob({
+    technicalRequirements: [{ label: 'Frontend language', strength: 'required', match: 'any', options: ['JavaScript'] }],
+    roleFamilies: ['frontend engineering'], responsibilityAreas: ['frontend development'],
+  });
   const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
   const assessed = [...report.recommended, ...report.stretch, ...report.lowFit, ...report.otherUnverified][0];
   assert.doesNotMatch(assessed.roleFit.evidence.join('\n'), /JavaScript: supported by Java/);
@@ -302,8 +320,7 @@ test('recognises generic technology-services titles from their sustained duties'
     title: 'Technology Services Intern',
     roleFamilies: ['technology services'],
     responsibilityAreas: ['application support', 'backend debugging', 'API test automation'],
-    requiredSkills: [],
-    preferredSkills: ['SQL'],
+    technicalRequirements: [{ label: 'Data tooling', strength: 'preferred', match: 'any', options: ['SQL'] }],
   });
   const result = scoreRoleFit(candidate, job, new Date('2026-09-01T10:00:00+12:00'));
   assert.ok(result.score >= 3, `expected generic technology-services duties to produce a viable fit, got ${result.score}`);
@@ -315,6 +332,11 @@ test('does not verify a job-board application route as a final direct link', () 
     source: 'SEEK',
     sourceUrl: 'https://www.seek.co.nz/job/12345678',
     applicationUrl: 'https://www.seek.co.nz/job/12345678/apply',
+    sourceEvidence: [{
+      name: 'SEEK', kind: 'job-board', url: 'https://www.seek.co.nz/job/12345678',
+      applicationUrl: 'https://www.seek.co.nz/job/12345678/apply', detailPageOpened: true,
+      applyRouteAvailable: true, expiredIndicatorVisible: false, unavailableIndicatorVisible: false, observedAt: verifiedAt,
+    }],
   });
   const result = classifyVerification(job, session().preferences, new Date('2026-09-01T10:00:00+12:00'));
   assert.equal(result.status, 'unverified');
@@ -337,7 +359,7 @@ test('only permits a clearly technical volunteer role when the user requested it
 });
 
 test('blocks a role whose required core technology is explicitly excluded', () => {
-  const job = activeJob({ requiredSkills: ['C#/.NET'] });
+  const job = activeJob({ technicalRequirements: [{ label: '.NET stack', strength: 'required', match: 'all', options: ['C#/.NET'] }] });
   const preferences = {
     ...session().preferences,
     constraints: [...session().preferences.constraints, {
@@ -354,8 +376,10 @@ test('renders the evidence funnel and direct vacancy evidence', () => {
   assert.match(markdown, /### Search attempts/);
   assert.match(markdown, /Leads discovered/);
   assert.match(markdown, /Programme: internship; contract: fixed-term; workload: full-time/);
-  assert.match(markdown, /Plugin version: 0\.6\.0/);
-  assert.match(markdown, /Session schema: 3/);
+  assert.match(markdown, /Plugin version: 0\.7\.0/);
+  assert.match(markdown, /Session schema: 4/);
+  assert.match(markdown, /Core duty fit:/);
+  assert.doesNotMatch(markdown, /Role fit: \d/);
 });
 
 test('appends new jobs, suppresses unchanged jobs, and re-reports changed state', async () => {
@@ -489,4 +513,103 @@ test('unchanged related opportunities stay suppressed when only verification tim
   assert.equal(result.writeAction, 'created');
   assert.equal(result.relatedOpportunities.length, 0);
   assert.equal(result.excludedPreviouslyReported, 1);
+});
+
+test('matches one supported option in an any-of technical requirement', () => {
+  const job = activeJob({
+    technicalRequirements: [{
+      label: 'Programming language', strength: 'required', match: 'any',
+      options: ['TypeScript', 'Python', 'Java', 'or similar'],
+    }],
+  });
+  const result = scoreRoleFit(candidate, job, new Date('2026-09-01T10:00:00+12:00'));
+  assert.equal(result.requiredTechnology, 'Met');
+  assert.match(result.evidence.join('\n'), /Java: supported by Java/);
+});
+
+test('retains official ATS evidence when a duplicate aggregator record is weaker', () => {
+  const official = activeJob();
+  const aggregator = activeJob({
+    source: 'Alion', sourceUrl: 'https://alion.io/jobs/software-test-engineer-intern',
+    applicationUrl: 'https://alion.io/jobs/software-test-engineer-intern',
+    requisitionId: undefined,
+    sourceEvidence: [{
+      name: 'Alion', kind: 'aggregator', url: 'https://alion.io/jobs/software-test-engineer-intern',
+      applicationUrl: 'https://alion.io/jobs/software-test-engineer-intern', detailPageOpened: true,
+      applyRouteAvailable: true, expiredIndicatorVisible: false, unavailableIndicatorVisible: false, observedAt: verifiedAt,
+    }],
+    dateEvidence: { ...activeJob().dateEvidence, closesAt: [{
+      value: '2026-08-01', sourceUrl: 'https://alion.io/jobs/software-test-engineer-intern',
+      sourceType: 'search-result', confidence: 'low',
+    }] },
+  });
+  const report = buildReport(session([aggregator, official]), { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(report.recommended.length, 1);
+  assert.match(report.recommended[0].sourceUrl, /careers\.example\.com/);
+  assert.equal(report.recommended[0].sourceEvidence.length, 2);
+  assert.equal(report.recommended[0].verification.status, 'verified-active');
+});
+
+test('requires a resume fingerprint whenever candidate evidence drives the mode', () => {
+  const missing = session();
+  delete missing.resumeFingerprint;
+  assert.match(validateSession(missing).errors.join('\n'), /resumeFingerprint/);
+
+  const criteriaOnly = session();
+  criteriaOnly.preferences.mode = 'criteria';
+  delete criteriaOnly.resumeFingerprint;
+  assert.equal(validateSession(criteriaOnly).valid, true);
+});
+
+test('does not append a different resume or search mode to the same daily report', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'nz-job-scout-context-'));
+  const input = join(folder, 'session.json');
+  const output = join(folder, 'nz-jobs-2026-09-01.md');
+  await writeFile(input, JSON.stringify(session()), 'utf8');
+  const first = await writeReport(input, output, { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(first.outputPath, output);
+
+  const changedContext = session();
+  changedContext.resumeFingerprint = 'b'.repeat(64);
+  await writeFile(input, JSON.stringify(changedContext), 'utf8');
+  const second = await writeReport(input, output, { now: '2026-09-01T12:00:00+12:00' });
+  assert.notEqual(second.outputPath, output);
+  assert.equal(second.writeAction, 'created');
+
+  const original = await readFile(output, 'utf8');
+  assert.doesNotMatch(original, /Incremental scan/);
+
+  const nextDay = await writeReport(input, join(folder, 'nz-jobs-2026-09-02.md'), { now: '2026-09-02T09:00:00+12:00' });
+  assert.equal(nextDay.excludedPreviouslyReported, 1);
+});
+
+test('rejects non-string report data before rendering', () => {
+  const invalid = session();
+  invalid.jobs[0].selectionRisks = [{ risk: 'Ambiguous final-year rule' }];
+  assert.match(validateSession(invalid).errors.join('\n'), /selectionRisks\[0\] must be a non-empty string/);
+});
+
+test('normalises a public Greenhouse inventory without credentials', async () => {
+  const fetcher = async (url) => new Response(JSON.stringify({ jobs: [{
+    id: 42, title: 'Quality Engineering Intern', absolute_url: 'https://boards.greenhouse.io/example/jobs/42',
+    location: { name: 'Auckland, New Zealand' }, updated_at: '2026-10-09T00:00:00Z',
+  }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const result = await discoverPublicAtsJobs({ provider: 'greenhouse', account: 'example' }, fetcher);
+  assert.equal(result.listings.length, 1);
+  assert.equal(result.listings[0].title, 'Quality Engineering Intern');
+  assert.match(result.listings[0].detailUrl, /greenhouse\.io/);
+});
+
+test('does not guess a Workday shard hostname', async () => {
+  await assert.rejects(
+    () => discoverPublicAtsJobs({ provider: 'workday', account: 'example', tenant: 'example', site: 'Careers' }, async () => { throw new Error('should not fetch'); }),
+    /exact public --host/,
+  );
+});
+
+test('keeps practical preference blockers separate from eligibility', () => {
+  const job = activeJob({ location: 'Wellington', workArrangement: 'on-site' });
+  const result = scorePracticalFit(candidate, session().preferences, job);
+  assert.match(result.blockers.join('\n'), /Location/);
+  assert.equal(result.eligibility, 'Met');
 });

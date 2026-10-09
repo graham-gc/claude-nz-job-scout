@@ -7,8 +7,11 @@ allowed-tools:
   - Edit(.nz-job-scout-state.json)
   - WebSearch
   - WebFetch
+  - Bash(shasum -a 256 *)
+  - Bash(nz-job-scout inventory *)
   - Bash(nz-job-scout validate *)
   - Bash(nz-job-scout report *)
+  - Bash(node *nz-job-scout inventory *)
   - Bash(node *nz-job-scout validate *)
   - Bash(node *nz-job-scout report *)
   - Bash(rm .nz-job-scout-session-*)
@@ -59,6 +62,8 @@ On a login wall, CAPTCHA, 401, 403, robots restriction, or access denial, stop u
 
 For `profile` and `combined` modes, read the complete CV. Use document reading for PDF and direct text reading for Markdown.
 
+Re-read the supplied resume on every invocation and calculate its SHA-256 with `shasum -a 256`. Store only that digest as `resumeFingerprint`; never store a global candidate profile. `profile` and `combined` sessions require the digest. `criteria` sessions omit it. A supplied resume always makes the mode `profile` or `combined`, never `criteria`.
+
 Model:
 
 - `skills`: concrete languages, frameworks, databases, protocols, and tools;
@@ -71,7 +76,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.6.0"` and `sessionSchemaVersion: 3`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.7.0"` and `sessionSchemaVersion: 4`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -123,6 +128,14 @@ When the visible page is sparse, inspect public page data without bypassing acce
 
 Structured data may support title, organisation, location, posting date, closing date, employment terms, and application URL. Record its source URL and `sourceType`; do not silently merge conflicting dates.
 
+For supported ATS inventories, prefer the bundled public adapter over free-form page interpretation:
+
+```bash
+nz-job-scout inventory --provider PROVIDER --account ACCOUNT [--host WORKDAY_HOST] [--site SITE] [--tenant TENANT] [--query QUERY]
+```
+
+Supported providers are Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday career sites. Workday requires the exact hostname visible in the public careers URL, including its `wdN` shard; never guess it. The adapter uses anonymous public endpoints, performs no retries or bypasses, and returns canonical inventory links as JSON. A 401, 403, 429, CAPTCHA, or invalid endpoint is a restricted source, not evidence that no vacancy exists. Use ordinary public-page research when the ATS cannot be identified or the endpoint is not public.
+
 ## Build the evidence session
 
 Create `.nz-job-scout-session-<timestamp>.json` in the user's current project directory. Do not place it in the plugin installation or store credentials, raw browser state, or unnecessary CV contents.
@@ -131,13 +144,18 @@ For each assessed vacancy record:
 
 - programme type, contract type, and workload as separate dimensions;
 - engagement model, location, arrangement, hours, duties, and technology requirements;
-- primary source and application URLs;
+- every observed source in `sourceEvidence[]`, including its kind, URL, application route, observed state, and timestamp;
+- the strongest primary source and application URLs, preferring employer/ATS evidence over job boards, snippets, and aggregators;
 - every observed posting, closing, start, and end date with provenance and confidence;
 - hard eligibility rules and selection preferences separately, each with `met`, `not-met`, or `unknown` compatibility;
 - explicit work-right requirements separately from candidate work rights;
 - exact detail-page and application-route evidence with a `Pacific/Auckland` verification time.
 
 Do not confuse a full-time fixed-term summer internship with permanent full-time employment. A temporary student visa is not unrestricted work rights, and full-time availability during a scheduled break is not post-study work status. Record a work-right `evidenceSource`; leave facts unknown unless the user, CV, or an official document states them. `unknown` is safer than an unsupported `met`.
+
+Represent technology wording as `technicalRequirements[]` groups. Use `match: "any"` for phrases such as “TypeScript, Python, Java, or similar” and `match: "all"` only when every option is required. Mark each group `required`, `preferred`, or `exposure`. Never flatten an either/or list into several mandatory skills.
+
+One vacancy may have several evidence sources. Preserve them all. Employer and ATS evidence outrank boards, search results, and aggregators. A weaker duplicate may add a discovery trail but must never replace an already observed official URL, application status, requirement, or date.
 
 Treat events, talent pools, candidate programmes, and recruitment channels as `relatedOpportunities[]`, not jobs. Preserve conditional audiences: for example, an event open only to candidates already registered for a programme is `conditional`, not generally open. Do not encode one user's channel preference as a universal exclusion.
 
@@ -161,7 +179,7 @@ Run the report command from the user's current project directory. The runtime wr
 
 The runtime is authoritative for validation, date conflicts, search coverage, deduplication, fit scoring, eligibility blockers, categorisation, and Markdown output. Correct invalid evidence instead of bypassing validation or hand-editing scores.
 
-The report separates:
+The report uses explainable categories—Core duty fit (`Strong`, `Partial`, `Low`), Required technology (`Met`, `Partially met`, `Not met`, `Unknown`), Eligibility (`Met`, `Unknown`, `Not met`), and Recommendation (`Apply`, `Consider`, `Skip`)—instead of presenting a pseudo-precise ten-point score. It separates:
 
 - verified recommendations;
 - verified stretch roles;
@@ -172,7 +190,7 @@ The report separates:
 - other rejected or unverified items;
 - related opportunities and recruitment channels.
 
-If today's report already exists, the runtime appends only new or materially changed items. Across recent daily reports, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`.
+If today's report already exists, the runtime appends only new or materially changed items when the resume fingerprint and criteria context are identical. Across recent reports with the same context, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`. A different resume or criteria set creates a separate context-suffixed report rather than mixing evidence into the existing file.
 
 After a successful report, remove the exact temporary session filename unless the user asks to keep it. Never use a wildcard in the cleanup command.
 
