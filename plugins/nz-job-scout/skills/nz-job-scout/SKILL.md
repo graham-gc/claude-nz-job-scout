@@ -1,6 +1,6 @@
 ---
 name: nz-job-scout
-description: Analyse a local PDF or Markdown CV and/or user criteria, research publicly accessible New Zealand vacancies, verify evidence, assess genuine experience fit, and save a Markdown job report without authenticated accounts.
+description: Read a local PDF or Markdown resume, find recent publicly accessible New Zealand jobs that genuinely fit it, and save a clear report with a direct application route.
 allowed-tools:
   - Read
   - Edit(.nz-job-scout-session-*.json)
@@ -21,28 +21,15 @@ allowed-tools:
 
 Find real, currently available New Zealand vacancies and assess them against the candidate's actual experience, constraints, and goals.
 
-## Inputs and modes
+## Minimal workflow
 
-Accept a CV path (`.pdf` or `.md`), explicit search criteria, or both. Infer the mode:
+The skill exists for one closed loop: **resume → suitable current jobs → an immediately usable application path**.
 
-- `profile`: candidate evidence without explicit job criteria;
-- `criteria`: explicit criteria without candidate evidence;
-- `combined`: both.
+Accept a PDF or Markdown resume, optional natural-language criteria, or both. A resume-only request uses the role families and locations that are clearly supported by the resume. Explicit criteria narrow or extend that scope. Default to vacancies posted within 30 days.
 
-At least one is required. Do not ask for information already present in the CV or conversation. Ask one concise question only when an omitted fact would materially change the eligible job set; otherwise state a conservative assumption.
+Do not invent location, availability, work-right, technology, or employment-type restrictions. Ask one short question only if the missing fact would materially change which roles are eligible.
 
-Defaults:
-
-- maximum posting age: 30 days;
-- state: currently open with a directly verified application route;
-- geography: New Zealand unless narrowed by user or supported context;
-- no invented employment-type, location, work-right, or arrangement restrictions.
-
-Before research, read [references/session-format.md](references/session-format.md) completely. It is the evidence contract used by the deterministic runtime.
-
-For each run, also read [references/source-planning.md](references/source-planning.md). It defines how to build a bounded public-source plan without guessing every possible job title.
-
-Read [references/state-file.md](references/state-file.md) when a project state file exists or when the user reports an application decision. It defines persistent, role-specific exclusions.
+Read [references/session-format.md](references/session-format.md) before producing the evidence session. Read [references/state-file.md](references/state-file.md) only if a state file exists or the user provides a role decision.
 
 ## Public-source boundary
 
@@ -57,6 +44,18 @@ Prefer primary sources:
 Use general search, SEEK, LinkedIn, Trade Me Jobs, aggregators, and indexed snippets only for discovery when publicly visible. A discovery result is not verification. Replace it with the exact public employer or ATS vacancy page before recommending it.
 
 On a login wall, CAPTCHA, 401, 403, robots restriction, or access denial, stop using that source for the run. Look for a public primary copy and record the limitation. Do not evade, retry repeatedly, or interpret access failure as evidence that a role is closed.
+
+## Recommendation gate
+
+Only include a role in **Ready to apply** or **Worth considering** when all of these are true:
+
+1. Its exact employer or public ATS vacancy page was opened.
+2. Its posting date is visible and within the requested time window.
+3. It has not closed or been removed.
+4. The report can show either a direct online application link, or a plain email address with the employer's instructions.
+5. Its daily responsibilities have genuine overlap with the resume or explicit criteria.
+
+A `mailto:` link by itself is not an application route. If email is the method, record the email address, instructions, and any required materials. A job without these facts may be kept as a private research lead, but must not appear in the user-facing recommendations.
 
 ## Candidate model
 
@@ -76,11 +75,11 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.7.0"` and `sessionSchemaVersion: 4`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.0"` and `sessionSchemaVersion: 5`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
-Build `searchFamilies` as a union of every role family explicitly requested by the user or retained conversation context and the materially distinct responsibility families supported by sustained recent work. Record the explicit group separately in `explicitSearchFamilies`; never remove one merely because another family is more recent or easier to search. In criteria mode, preserve the complete explicit scope. Do not attempt a Cartesian product of titles, technologies, seniority terms, locations, and employment types.
+Build search families from the user's explicit request plus sustained responsibility areas in the resume. Use a small number of broad role, programme and location queries; do not attempt to enumerate title-and-skill combinations. A role title is only a lead—read its duties before deciding fit.
 
 When the request includes internships, graduate roles, studentships, placements, fixed-term student work, part-time student work, or summer work, set `programmeFirstRequired: true` and perform a `programme-discovery` pass before stack-specific searching. Inspect broad student and early-career programme inventories without CV technology terms. Capture every plausibly technical vacancy first, including generic titles such as Technology Services Intern, Digital Services Intern, Systems Intern, ICT Intern, Service Management Intern, and Application Support Intern. Rank or reject them only after reading their duties. A title that omits “software”, “Java”, “QA”, or “automation” must not be discarded before duty review.
 
@@ -146,6 +145,9 @@ For each assessed vacancy record:
 - engagement model, location, arrangement, hours, duties, and technology requirements;
 - every observed source in `sourceEvidence[]`, including its kind, URL, application route, observed state, and timestamp;
 - the strongest primary source and application URLs, preferring employer/ATS evidence over job boards, snippets, and aggregators;
+- `application`, using exactly one of:
+  - `{ "method": "online", "url": "https://...", "requiredMaterials": ["CV"] }`; or
+  - `{ "method": "email", "email": "jobs@example.nz", "instructions": "State the requested subject or message", "requiredMaterials": ["CV", "GitHub link"] }`;
 - every observed posting, closing, start, and end date with provenance and confidence;
 - hard eligibility rules and selection preferences separately, each with `met`, `not-met`, or `unknown` compatibility;
 - explicit work-right requirements separately from candidate work rights;
@@ -160,6 +162,10 @@ One vacancy may have several evidence sources. Preserve them all. Employer and A
 Treat events, talent pools, candidate programmes, and recruitment channels as `relatedOpportunities[]`, not jobs. Preserve conditional audiences: for example, an event open only to candidates already registered for a programme is `conditional`, not generally open. Do not encode one user's channel preference as a universal exclusion.
 
 ## Validate and report
+
+### Simplicity priority
+
+The minimal workflow and recommendation gate take priority over the implementation-level audit details above. Keep research bounded: use a few broad discovery searches, then verify primary employer or ATS pages for plausible matches. Do not keep searching merely to increase funnel counts, and do not expose the audit trail, rejected roles, events, talent pools, or raw queries in the final report. The only user-facing question is: **what can this person apply for now, and how?**
 
 Quote paths and run:
 
@@ -177,18 +183,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/
 
 Run the report command from the user's current project directory. The runtime writes to `./output/nz-jobs-YYYY-MM-DD.md` and keeps history in that directory. Do not supply `--output` for the normal workflow. Only when the user explicitly requests another location may you pass both `--output "/requested/path/report.md"` and `--allow-custom-output`.
 
-The runtime is authoritative for validation, date conflicts, search coverage, deduplication, fit scoring, eligibility blockers, categorisation, and Markdown output. Correct invalid evidence instead of bypassing validation or hand-editing scores.
+The runtime is authoritative for validation, posting age, application-route completeness, deduplication, and Markdown output. Correct invalid evidence instead of bypassing validation or hand-editing the report.
 
-The report uses explainable categories—Core duty fit (`Strong`, `Partial`, `Low`), Required technology (`Met`, `Partially met`, `Not met`, `Unknown`), Eligibility (`Met`, `Unknown`, `Not met`), and Recommendation (`Apply`, `Consider`, `Skip`)—instead of presenting a pseudo-precise ten-point score. It separates:
-
-- verified recommendations;
-- verified stretch roles;
-- high-value leads requiring manual verification;
-- verified closed or unavailable roles;
-- practically incompatible roles;
-- verified low-fit roles;
-- other rejected or unverified items;
-- related opportunities and recruitment channels.
+The user-facing report is deliberately short. It contains only **Ready to apply**, **Worth considering**, and concise **Scan notes**. Do not fill it with stale jobs, closed roles, activities, talent pools, raw search queries, or lengthy rejection tables.
 
 If today's report already exists, the runtime appends only new or materially changed items when the resume fingerprint and criteria context are identical. Across recent reports with the same context, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`. A different resume or criteria set creates a separate context-suffixed report rather than mixing evidence into the existing file.
 
@@ -196,7 +193,7 @@ After a successful report, remove the exact temporary session filename unless th
 
 ## Return the result
 
-Give the absolute report path, then quote the report's funnel counts, strongest verified roles, manual-verification leads, blockers, and coverage limits. The deterministic report is authoritative: do not add a date, deadline, sponsorship statement, work-right claim, recommendation, or market conclusion that is absent from it. Do not recommend a role merely because logistics fit when the day-to-day work fit is weak.
+Give the absolute report path, then name only the roles the user can act on immediately. State the direct application link or email path in the response as well. The report is authoritative: do not add a date, deadline, sponsorship statement, work-right claim, recommendation, or market conclusion that is absent from it. Do not recommend a role merely because logistics fit when the day-to-day work fit is weak.
 
 Use bounded language:
 
