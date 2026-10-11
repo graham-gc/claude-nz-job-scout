@@ -7,8 +7,8 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-export const PLUGIN_VERSION = '0.7.0';
-export const SESSION_SCHEMA_VERSION = 4;
+export const PLUGIN_VERSION = '0.8.0';
+export const SESSION_SCHEMA_VERSION = 5;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
 const CONCEPT_GROUPS = [
@@ -100,6 +100,43 @@ export function normaliseUrl(value) {
         return asText(value);
     }
 }
+function isHttpUrl(value) {
+    try {
+        return ['http:', 'https:'].includes(new URL(asText(value)).protocol);
+    }
+    catch {
+        return false;
+    }
+}
+function isEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(asText(value));
+}
+/**
+ * A job may apply online or by email.  Email is deliberately not represented as
+ * an application URL: a mailto link alone loses the instructions users need.
+ */
+function applicationRoute(job) {
+    const route = job?.application;
+    if (!route || typeof route !== 'object')
+        return undefined;
+    if (route.method === 'online' && isHttpUrl(route.url))
+        return { method: 'online', url: normaliseUrl(route.url), requiredMaterials: asArray(route.requiredMaterials) };
+    if (route.method === 'email' && isEmail(route.email) && asText(route.instructions))
+        return { method: 'email', email: asText(route.email), instructions: asText(route.instructions), requiredMaterials: asArray(route.requiredMaterials) };
+    return undefined;
+}
+function applicationProblems(job) {
+    const route = applicationRoute(job);
+    if (!route) {
+        if (/^mailto:/i.test(asText(job?.applicationUrl)))
+            return ['Email application needs a plain email address and instructions, not only a mailto link'];
+        return ['No explicit, usable application route was recorded'];
+    }
+    if (route.method === 'online' && hostMatches(route.url, [...BLOCKED_AGGREGATORS, ...DISCOVERY_ONLY_HOSTS])) {
+        return ['The application URL is a discovery board or aggregator, not an employer or ATS application page'];
+    }
+    return [];
+}
 function canonicalJson(value) {
     if (Array.isArray(value))
         return `[${value.map(canonicalJson).join(',')}]`;
@@ -184,7 +221,8 @@ function sameRole(left, right) {
 }
 function leadMatchesJob(lead, job) {
     const leadUrl = normaliseUrl(lead?.url);
-    return Boolean(leadUrl && [normaliseUrl(job?.sourceUrl), normaliseUrl(job?.applicationUrl)].includes(leadUrl))
+    const route = applicationRoute(job);
+    return Boolean(leadUrl && [normaliseUrl(job?.sourceUrl), normaliseUrl(job?.applicationUrl), route?.method === 'online' ? route.url : ''].includes(leadUrl))
         || sameRole(lead, job);
 }
 function dateObservations(job, field) {
@@ -210,7 +248,8 @@ export function resolveDateEvidence(job, field) {
 }
 function jobIdentityKeys(job) {
     const keys = [];
-    const applicationUrl = normaliseUrl(job.applicationUrl);
+    const route = applicationRoute(job);
+    const applicationUrl = route?.method === 'online' ? route.url : normaliseUrl(job.applicationUrl);
     const sourceUrl = normaliseUrl(job.sourceUrl);
     if (applicationUrl)
         keys.push(`url:${applicationUrl}`);
@@ -223,7 +262,7 @@ function jobIdentityKeys(job) {
     const location = normalise(job.location);
     if (employer && title) {
         keys.push(`role:${employer}|${title}|${location}`);
-        if (!job.requisitionId && !applicationUrl)
+        if (!job.requisitionId && !applicationUrl && route?.method !== 'email')
             keys.push(`role-loose:${employer}|${title}`);
     }
     return [...new Set(keys)];
@@ -531,6 +570,19 @@ export function validateSession(session) {
             errors.push(`jobs[${index}].isTechnicalVolunteer must be boolean`);
         if (job?.compensation && !['paid', 'unpaid', 'reimbursed', 'unknown'].includes(job.compensation.kind))
             errors.push(`jobs[${index}].compensation.kind is invalid`);
+        if (job?.application !== undefined) {
+            if (!['online', 'email'].includes(job.application?.method))
+                errors.push(`jobs[${index}].application.method must be online or email`);
+            if (job.application?.method === 'online' && !isHttpUrl(job.application?.url))
+                errors.push(`jobs[${index}].application.url must be an http(s) URL for online applications`);
+            if (job.application?.method === 'email') {
+                if (!isEmail(job.application?.email))
+                    errors.push(`jobs[${index}].application.email must be a valid email address`);
+                requiredString(job.application?.instructions, `jobs[${index}].application.instructions`, errors);
+            }
+            if (job.application?.requiredMaterials !== undefined)
+                validateStringArray(job.application.requiredMaterials, `jobs[${index}].application.requiredMaterials`, errors);
+        }
         validateStringArray(job?.roleFamilies, `jobs[${index}].roleFamilies`, errors, { nonEmpty: true });
         validateStringArray(job?.responsibilityAreas, `jobs[${index}].responsibilityAreas`, errors, { nonEmpty: true });
         validateStringArray(job?.domains, `jobs[${index}].domains`, errors);
@@ -597,7 +649,7 @@ export function validateSession(session) {
     });
     const urlOwners = new Map();
     asArray(session.jobs).forEach((job, index) => {
-        for (const rawUrl of [job?.sourceUrl, job?.applicationUrl]) {
+        for (const rawUrl of [job?.sourceUrl, job?.applicationUrl, job?.application?.method === 'online' ? job.application.url : undefined]) {
             const url = normaliseUrl(rawUrl);
             if (!url)
                 continue;
@@ -911,11 +963,12 @@ export function classifyVerification(job, preferences, now = new Date()) {
         status = 'rejected';
         reasons.push('Source URL is invalid');
     }
+    const route = applicationRoute(job);
     let applicationHostname = '';
     try {
-        applicationHostname = new URL(job.applicationUrl || job.sourceUrl).hostname.toLowerCase();
+        applicationHostname = route?.method === 'online' ? new URL(route.url).hostname.toLowerCase() : '';
     }
-    catch { /* Source URL validation above supplies the user-facing error. */ }
+    catch { /* applicationProblems below supplies the user-facing error. */ }
     if (BLOCKED_AGGREGATORS.some((domain) => hostname.includes(domain) || applicationHostname.includes(domain))) {
         status = 'rejected';
         reasons.push('Final link is an aggregator rather than a permitted direct vacancy page');
@@ -941,6 +994,10 @@ export function classifyVerification(job, preferences, now = new Date()) {
         status = 'unverified';
         reasons.push('No working application route or current application instructions were verified');
     }
+    const routeIssues = applicationProblems(job);
+    if (routeIssues.length && status === 'verified-active')
+        status = 'unverified';
+    reasons.push(...routeIssues);
     const dates = resolvedJobDates(job);
     const conflicts = Object.entries(dates).filter(([, result]) => result.conflict);
     if (conflicts.length && status === 'verified-active') {
@@ -972,9 +1029,10 @@ export function classifyVerification(job, preferences, now = new Date()) {
 }
 function evidenceStrength(job) {
     const evidence = job.verificationEvidence ?? {};
+    const route = applicationRoute(job);
     return sourceEvidenceRank(bestSourceEvidence(job)) * 10
         + Number(Boolean(evidence.detailPageOpened)) * 2 + Number(Boolean(evidence.applyRouteAvailable)) * 2
-        + Number(Boolean(job.applicationUrl)) + Number(Boolean(job.requisitionId))
+        + Number(Boolean(route)) + Number(Boolean(job.requisitionId))
         + Object.values(job.dateEvidence ?? {}).flatMap(asArray).filter((entry) => ['employer', 'ats'].includes(entry.sourceType)).length;
 }
 function mergeUnique(items, key) {
@@ -1034,9 +1092,10 @@ function classifyRelatedOpportunity(item) {
     return 'unverified';
 }
 function assessmentState(job) {
+    const route = applicationRoute(job);
     return fingerprint({
         status: job.verification.status, reasons: job.verification.reasons, sourceUrl: normaliseUrl(job.sourceUrl),
-        applicationUrl: normaliseUrl(job.applicationUrl), requisitionId: job.requisitionId,
+        applicationUrl: route?.method === 'online' ? route.url : undefined, application: route, requisitionId: job.requisitionId,
         dates: Object.fromEntries(Object.entries(job.verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
         programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
         technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
@@ -1154,34 +1213,74 @@ function sourceCoverage(attempts) {
     return [...grouped.entries()].map(([source, value]) => `- ${source} — ${[...value.statuses].join(', ')}${value.notes.length ? `: ${[...new Set(value.notes)].join('; ')}` : ''}`);
 }
 function renderJobDetails(job, heading) {
+    const route = applicationRoute(job);
+    const materials = route?.requiredMaterials?.length ? route.requiredMaterials.join(', ') : 'Not stated on the vacancy page';
+    const applyLines = route?.method === 'online'
+        ? [`- Apply online: [Open application](${route.url})`]
+        : route?.method === 'email'
+            ? [`- Email: [${route.email}](mailto:${route.email})`, `- Instructions: ${route.instructions}`]
+            : ['- Application route: not verified'];
     return [
         `${heading}${job.historyChange === 'updated' ? ' — Updated evidence' : ''}`, '',
-        `- Programme: ${job.programmeType}; contract: ${job.contractType}; workload: ${job.workload}; ${job.engagementModel ?? 'engagement model not stated'}${job.isTechnicalVolunteer ? ' (technical volunteer)' : ''}`,
+        `- Location: ${job.location}${job.workArrangement ? ` (${job.workArrangement})` : ''}`,
+        `- Type: ${job.programmeType}; ${job.contractType}; ${job.workload}${job.isTechnicalVolunteer ? '; technical volunteer' : ''}`,
         `- Compensation: ${job.compensation ? `${job.compensation.kind}${job.compensation.detail ? ` — ${job.compensation.detail}` : ''}` : 'not stated'}`,
-        `- ${dateSummary(job)}`, `- Verified: ${job.verificationEvidence.verifiedAt}`,
-        `- Primary evidence: ${bestSourceEvidence(job)?.kind ?? 'unknown'}; observed sources: ${asArray(job.sourceEvidence).map((item) => `${item.name} (${item.kind})`).join(', ')}`,
-        `- Recommendation: ${job.recommendation}`, `- Core duty fit: ${job.roleFit.coreDutyFit}`,
-        `- Required technology: ${job.roleFit.requiredTechnology}`, `- Eligibility: ${job.practicalFit.eligibility}`,
-        `- Link: ${job.applicationUrl || job.sourceUrl}`, '',
-        '**Evidence of fit**', '', bulletList(job.roleFit.evidence), '',
-        '**Technical gaps / cautions**', '', bulletList(job.roleFit.gaps), '',
-        '**Practical-fit evidence**', '', bulletList(job.practicalFit.positives), '',
-        '**Practical cautions**', '', bulletList(job.practicalFit.cautions), '',
+        `- ${dateSummary(job)}`, `- Verified: ${job.verificationEvidence.verifiedAt}`, '',
+        '**Why it matches**', '', bulletList(job.roleFit.evidence), '',
+        ...(job.roleFit.gaps.length || job.practicalFit.cautions.length ? ['**Main consideration**', '', ...bulletList([...job.roleFit.gaps, ...job.practicalFit.cautions]), ''] : []),
+        '**Apply**', '', `- Vacancy page: [Open job description](${job.sourceUrl})`, ...applyLines,
+        `- Required materials: ${materials}`, '',
     ];
 }
 function table(items, fitLabel = 'Role fit') {
     if (!items.length)
         return [];
     return [
-        `| Role | Company | Location / arrangement | Engagement / pay | Recommendation | ${fitLabel} | Required technology | Eligibility | Direct link |`, '|---|---|---|---|---|---|---|---|---|',
+        `| Role | Company | Location | Type | Posted | Apply |`, '|---|---|---|---|---|---|',
         ...items.map((job) => {
-            const engagement = job.isTechnicalVolunteer ? 'Volunteer' : (job.engagementModel ?? 'Not stated');
-            const pay = job.compensation?.kind ?? 'not stated';
-            return `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location} / ${job.workArrangement ?? '-'}`)} | ${escapeCell(`${engagement} / ${pay}`)} | ${job.recommendation} | ${job.roleFit.coreDutyFit} | ${job.roleFit.requiredTechnology} | ${job.practicalFit.eligibility} | [Open listing](${job.applicationUrl || job.sourceUrl}) |`;
+            const route = applicationRoute(job);
+            const apply = route?.method === 'online' ? `[Apply online](${route.url})` : route?.method === 'email' ? `[Email ${escapeCell(route.email)}](mailto:${route.email})` : 'Not verified';
+            return `| ${escapeCell(job.title)} | ${escapeCell(job.employer)} | ${escapeCell(`${job.location}${job.workArrangement ? ` / ${job.workArrangement}` : ''}`)} | ${escapeCell(`${job.programmeType} / ${job.contractType}`)} | ${job.verification.dates.postedAt.value ?? '-'} | ${apply} |`;
         }), '',
     ];
 }
 export function renderMarkdown(report) {
+    const coverage = report.searchCoverage;
+    const restrictedSources = asArray(coverage.sourceTargets).filter((source) => source.status !== 'searched');
+    const lines = [
+        '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`,
+        `Plugin version: ${report.pluginVersion} · Session schema: ${report.sessionSchemaVersion}`,
+        `<!-- nz-job-scout:context ${JSON.stringify(report.scanContext)} -->`, '',
+        '## Search', '',
+        `- Resume used: ${report.scanContext.resumeFingerprint ? 'yes' : 'no'}`,
+        `- Role families: ${coverage.searchFamilies.join(', ') || 'not specified'}`,
+        `- Posting window: ${report.preferences.maxPostingAgeDays ?? 30} days`,
+        `- Listings reviewed: ${report.searchedCount}`,
+        `- Coverage: ${coverage.status}`, '',
+        '## Ready to apply', '',
+    ];
+    if (!report.recommended.length) {
+        lines.push(coverage.status === 'complete'
+            ? 'No recently posted, verified and actionable matches were found.'
+            : 'No recently posted, verified and actionable matches were found in the public sources accessible in this scan.', '');
+    }
+    else {
+        lines.push(...table(report.recommended));
+        report.recommended.forEach((job, index) => lines.push(...renderJobDetails(job, `### ${index + 1}. ${job.title} — ${job.employer}`), jobMarker(job)));
+    }
+    if (report.stretch.length) {
+        lines.push('', '## Worth considering', '', '> These roles have a usable application path but are a weaker day-to-day fit.', '', ...table(report.stretch));
+        report.stretch.forEach((job, index) => lines.push(...renderJobDetails(job, `### ${index + 1}. ${job.title} — ${job.employer}`), jobMarker(job)));
+    }
+    lines.push('', '## Scan notes', '');
+    lines.push(`- Public sources checked: ${coverage.sourceTargets.filter((source) => source.status === 'searched').map((source) => `[${source.name}](${source.url})`).join(', ') || 'none'}`);
+    if (restrictedSources.length)
+        lines.push(`- Restricted or skipped sources: ${restrictedSources.map((source) => `${source.name}${source.note ? ` — ${source.note}` : ''}`).join('; ')}`);
+    lines.push(`- Not included: ${report.rejected.length + report.manualVerification.length} roles without a recent verified primary vacancy page or usable application route.`);
+    lines.push('', '<!-- NZ Job Scout state metadata: used only for incremental reports -->');
+    return `${lines.join('\n')}\n`;
+}
+function renderLegacyMarkdown(report) {
     const coverage = report.searchCoverage;
     const criteriaOnly = report.preferences.mode === 'criteria';
     const fitLabel = criteriaOnly ? 'Criteria fit' : 'Role fit';
@@ -1403,14 +1502,7 @@ async function loadReportHistory(outputPath, now, maxPostingAgeDays, expectedCon
 function rawJobState(job, preferences, now) {
     job = canonicaliseJobEvidence(job);
     const verification = classifyVerification(job, preferences, now);
-    return fingerprint({
-        status: verification.status, reasons: verification.reasons, sourceUrl: normaliseUrl(job.sourceUrl), applicationUrl: normaliseUrl(job.applicationUrl), requisitionId: job.requisitionId,
-        dates: Object.fromEntries(Object.entries(verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
-        programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
-        technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
-        technicalRequirements: job.technicalRequirements,
-        strongestSourceKind: bestSourceEvidence(job)?.kind,
-    });
+    return assessmentState({ ...job, verification });
 }
 function filterHistoricalItems(items, history, identityFunction, fingerprintFunction) {
     const fresh = [];
@@ -1464,13 +1556,8 @@ export async function writeReport(inputPath, outputPath, options = {}) {
         history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays, scanContext);
     }
     const jobs = filterHistoricalItems(activeSession.jobs, history, jobIdentityKeys, (job) => rawJobState(job, activeSession.preferences, now));
-    const opportunities = filterHistoricalItems(activeSession.relatedOpportunities, history, opportunityIdentityKeys, (item) => fingerprint({
-        registrationStatus: item.registrationStatus, startsAt: item.startsAt, endsAt: item.endsAt,
-        conditions: item.conditions, detailPageOpened: item.verificationEvidence?.detailPageOpened,
-        applyRouteAvailable: item.verificationEvidence?.applyRouteAvailable,
-        expiredIndicatorVisible: item.verificationEvidence?.expiredIndicatorVisible,
-        unavailableIndicatorVisible: item.verificationEvidence?.unavailableIndicatorVisible,
-    }));
+    // Events and talent pools are deliberately outside the concise job report.
+    const opportunities = { fresh: [], excluded: asArray(activeSession.relatedOpportunities).length, updated: 0 };
     const reportLeads = activeSession.leads.map((lead) => {
         if (lead.status !== 'assessed' || jobs.fresh.some((job) => leadMatchesJob(lead, job)))
             return lead;

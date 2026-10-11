@@ -1,8 +1,8 @@
 # claude-nz-job-scout
 
-A Claude Code plugin for evidence-based New Zealand job discovery, CV matching, and Markdown reporting.
+A Claude Code plugin that reads a resume, finds recent genuinely matching New Zealand roles, and creates an actionable Markdown report.
 
-> Status: **0.7.0 alpha — context-safe evidence matching with public ATS adapters.** Claude reads the CV and researches public job pages; the bundled zero-dependency runtime validates the evidence funnel, source precedence, structured technical alternatives, resume/search context, work-right claims, persistent exclusions, dates, recommendations, and report output. Coverage remains limited to the public sources actually completed in each run.
+> Status: **0.8.0 alpha — actionable job reports.** A recommendation needs a recent verified employer/ATS vacancy page and either a direct online application URL or an explicit email application route with instructions.
 
 ## What works now
 
@@ -48,7 +48,7 @@ The default posting window is 30 days and can be overridden.
 
 ## Personal search state
 
-Version 0.7.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
+Version 0.8.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
 
 The file is ignored by Git and is not included in the marketplace package. It contains no credentials or browser state.
 
@@ -155,7 +155,7 @@ Everything needed at runtime is included in the plugin. Users do **not** need to
 
 ## Reliability policy
 
-A recommended listing must have a directly opened job-detail page, no visible expired state, a working application route or current application instructions, a posting date inside the requested window, and a verification timestamp. Aggregators can be used only to discover leads; they cannot be final evidence or override a stronger employer/ATS record.
+A recommended listing must have a directly opened employer or public-ATS job-detail page, no visible expired state, a posting date inside the requested window, and a verification timestamp. It must also show either a direct online application page or a plain email address with the employer's application instructions. Aggregators can discover leads only; they can never be a final recommendation link.
 
 ## A job board blocks anonymous access
 

@@ -54,6 +54,7 @@ function activeJob(overrides = {}) {
     source: 'Employer careers site',
     sourceUrl: 'https://careers.example.com/jobs/NZ-101?tracking=test',
     applicationUrl: 'https://careers.example.com/jobs/NZ-101/apply',
+    application: { method: 'online', url: 'https://careers.example.com/jobs/NZ-101/apply', requiredMaterials: ['CV'] },
     requisitionId: 'NZ-101',
     title: 'Software Test Engineer Intern',
     employer: 'Example Engineering',
@@ -110,8 +111,8 @@ function leadFor(job, overrides = {}) {
 function session(jobs = [activeJob()], overrides = {}) {
   const leads = jobs.map((job) => leadFor(job));
   return {
-    pluginVersion: '0.7.0',
-    sessionSchemaVersion: 4,
+    pluginVersion: '0.8.0',
+    sessionSchemaVersion: 5,
     resumeFingerprint,
     candidate: structuredClone(candidate),
     preferences: {
@@ -159,7 +160,7 @@ test('validates the structured evidence session', () => {
 test('rejects stale sessions and incomplete programme-first plans', () => {
   const stale = session();
   stale.pluginVersion = '0.5.1';
-  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.7\.0/);
+  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.8\.0/);
 
   const missingProgrammePlan = session();
   missingProgrammePlan.searchCoverage.sourceTargets = missingProgrammePlan.searchCoverage.sourceTargets.filter((target) => target.purpose !== 'programme-inventory');
@@ -291,7 +292,7 @@ test('separates high-value unverified leads from verified recommendations', () =
   assert.equal(report.manualVerification.length, 1);
 });
 
-test('lists recruitment programmes separately from job recommendations', () => {
+test('keeps recruitment programmes out of the concise job report', () => {
   const opportunity = {
     kind: 'programme', title: 'Candidate Meet and Greet', organisation: 'Summer Programme',
     url: 'https://programme.example.nz/event', registrationStatus: 'conditional',
@@ -302,7 +303,7 @@ test('lists recruitment programmes separately from job recommendations', () => {
   const report = buildReport(session([], { leads: [], relatedOpportunities: [opportunity] }), { now: '2026-09-01T10:00:00+12:00' });
   assert.equal(report.relatedOpportunities[0].status, 'conditional');
   assert.equal(report.recommended.length, 0);
-  assert.match(renderMarkdown(report), /never counted as job recommendations/);
+  assert.doesNotMatch(renderMarkdown(report), /Candidate Meet and Greet/);
 });
 
 test('does not treat Java as JavaScript evidence', () => {
@@ -332,6 +333,7 @@ test('does not verify a job-board application route as a final direct link', () 
     source: 'SEEK',
     sourceUrl: 'https://www.seek.co.nz/job/12345678',
     applicationUrl: 'https://www.seek.co.nz/job/12345678/apply',
+    application: { method: 'online', url: 'https://www.seek.co.nz/job/12345678/apply', requiredMaterials: ['CV'] },
     sourceEvidence: [{
       name: 'SEEK', kind: 'job-board', url: 'https://www.seek.co.nz/job/12345678',
       applicationUrl: 'https://www.seek.co.nz/job/12345678/apply', detailPageOpened: true,
@@ -370,16 +372,15 @@ test('blocks a role whose required core technology is explicitly excluded', () =
   assert.match(result.blockers.join('\n'), /explicit core-technology exclusion/);
 });
 
-test('renders the evidence funnel and direct vacancy evidence', () => {
+test('renders a concise report with a clear direct application route', () => {
   const markdown = renderMarkdown(buildReport(session(), { now: '2026-09-01T10:00:00+12:00' }));
-  assert.match(markdown, /## Verified recommendations/);
-  assert.match(markdown, /### Search attempts/);
-  assert.match(markdown, /Leads discovered/);
-  assert.match(markdown, /Programme: internship; contract: fixed-term; workload: full-time/);
-  assert.match(markdown, /Plugin version: 0\.7\.0/);
-  assert.match(markdown, /Session schema: 4/);
-  assert.match(markdown, /Core duty fit:/);
-  assert.doesNotMatch(markdown, /Role fit: \d/);
+  assert.match(markdown, /## Ready to apply/);
+  assert.match(markdown, /## Scan notes/);
+  assert.match(markdown, /Vacancy page: \[Open job description\]/);
+  assert.match(markdown, /Apply online: \[Open application\]/);
+  assert.match(markdown, /Plugin version: 0\.8\.0/);
+  assert.match(markdown, /Session schema: 5/);
+  assert.doesNotMatch(markdown, /### Search attempts/);
 });
 
 test('appends new jobs, suppresses unchanged jobs, and re-reports changed state', async () => {
@@ -438,14 +439,14 @@ test('requires every assessed lead to have a matching evidence record', () => {
   assert.match(validateSession(invalid).errors.join('\n'), /assessed but has no matching jobs\[\] evidence record/);
 });
 
-test('keeps unresolved high-priority leads visible for manual verification', () => {
+test('does not let unresolved discovery leads pollute the actionable report', () => {
   const lead = leadFor(activeJob(), {
     status: 'blocked', detailPageOpened: false, priority: 'high', directSourceStatus: 'not-found',
     reason: 'The discovery page was visible but no primary vacancy page could be found',
   });
   const report = buildReport(session([], { leads: [lead] }), { now: '2026-09-01T10:00:00+12:00' });
   assert.equal(report.unresolvedHighValueLeads.length, 1);
-  assert.match(renderMarkdown(report), /The discovery page was visible/);
+  assert.doesNotMatch(renderMarkdown(report), /The discovery page was visible/);
 });
 
 test('rejects aggregator employer inventories and fake programme inventories', () => {
@@ -493,7 +494,7 @@ test('project state permanently excludes a decided role from output', async () =
   const markdown = await readFile(output, 'utf8');
   assert.equal(result.recommended.length, 0);
   assert.equal(result.excludedByProjectState, 2);
-  assert.match(markdown, /Persistently excluded roles\/leads: 2/);
+  assert.match(markdown, /No recently posted, verified and actionable matches were found/);
   assert.doesNotMatch(markdown, /### 1\. Software Test Engineer Intern/);
 });
 
@@ -612,4 +613,34 @@ test('keeps practical preference blockers separate from eligibility', () => {
   const result = scorePracticalFit(candidate, session().preferences, job);
   assert.match(result.blockers.join('\n'), /Location/);
   assert.equal(result.eligibility, 'Met');
+});
+
+test('does not recommend a mailto link without plain email instructions', () => {
+  const job = activeJob({
+    applicationUrl: 'mailto:careers@example.com',
+    application: undefined,
+    sourceEvidence: [{
+      ...activeJob().sourceEvidence[0],
+      applicationUrl: 'mailto:careers@example.com',
+    }],
+  });
+  const report = buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' });
+  assert.equal(report.recommended.length, 0);
+  assert.match(report.manualVerification[0].verification.reasons.join('\n'), /Email application needs a plain email address/);
+});
+
+test('renders a direct email application path clearly', () => {
+  const job = activeJob({
+    applicationUrl: undefined,
+    application: {
+      method: 'email', email: 'careers@example.com',
+      instructions: 'Email your CV and GitHub link with a short note about your fit.',
+      requiredMaterials: ['CV', 'GitHub link'],
+    },
+    sourceEvidence: [{ ...activeJob().sourceEvidence[0], applicationUrl: undefined }],
+  });
+  const markdown = renderMarkdown(buildReport(session([job]), { now: '2026-09-01T10:00:00+12:00' }));
+  assert.match(markdown, /Email: \[careers@example\.com\]\(mailto:careers@example\.com\)/);
+  assert.match(markdown, /Required materials: CV, GitHub link/);
+  assert.match(markdown, /Open job description/);
 });

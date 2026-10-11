@@ -16,8 +16,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.7.0",
-  "sessionSchemaVersion": 4,
+  "pluginVersion": "0.8.0",
+  "sessionSchemaVersion": 5,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
     "name": "Example Candidate",
@@ -268,6 +268,11 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       "source": "Employer careers site",
       "sourceUrl": "https://careers.example.com/jobs/NZ-101",
       "applicationUrl": "https://careers.example.com/jobs/NZ-101/apply",
+      "application": {
+        "method": "online",
+        "url": "https://careers.example.com/jobs/NZ-101/apply",
+        "requiredMaterials": ["CV", "Cover letter"]
+      },
       "requisitionId": "NZ-101",
       "title": "Software Test Engineer Intern",
       "employer": "Example Engineering",
@@ -437,7 +442,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ### Jobs and dates
 
-- `sourceEvidence[]` records every observed source. Employer and ATS sources outrank job boards, search results, and aggregators. `sourceUrl` and `applicationUrl` identify the strongest observed primary evidence and direct destination.
+- `sourceEvidence[]` records every observed source. Employer and ATS sources outrank job boards, search results, and aggregators. `sourceUrl` identifies the exact primary vacancy page.
+- `application` is mandatory for a formal recommendation. Use `method: "online"` with a public application URL, or `method: "email"` with a plain email address, employer instructions, and any stated required materials. A `mailto:` URL alone is not enough.
 - Derive role families and responsibilities from daily duties, not title alone.
 - Put technical requirements in structured `technicalRequirements[]` groups. Use `any` for alternatives and `all` only when every option is required. Put study, degree, work-right, citizenship, availability, security, and export-control rules in `requirements`.
 - A hard `not-met` requirement is a blocker. A hard `unknown` requirement is a caution requiring manual confirmation. A preference does not become a hard blocker.
