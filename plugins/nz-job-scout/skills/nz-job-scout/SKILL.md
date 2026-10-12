@@ -75,7 +75,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.0"` and `sessionSchemaVersion: 5`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.1"` and `sessionSchemaVersion: 6`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -94,7 +94,7 @@ Whenever a lead reveals an employer operating in an intended responsibility fami
 
 Continue discovery adaptively. After both required routes are attempted for a family, stop optional reformulation when two consecutive `focused-follow-up` operations produce no new canonical vacancy identities. Finding one vacancy is never a stopping condition. A blocked source makes coverage partial; it does not justify repeated retries or bypassing access controls.
 
-Create `searchCoverage.sourceTargets[]` before searching. Include at least one public board-discovery target and one employer/ATS target. Use one employer/ATS target per named employer; never group several employers under one URL. For programme-first scans, also include a programme-inventory target whose public listing collection is broad enough to expose generic early-career titles. Record `inventoryScope`, the exact target URL, every inspected `itemUrls` entry, and the matching `itemsInspected` count, including zero. Set each target to `searched`, `discovery-only`, `blocked`, `unavailable`, or `skipped` after the run. An aggregator, unrelated overseas inventory, single job detail page, event page, or search snippet is not a completed employer or Auckland/New Zealand programme inventory.
+Create `searchCoverage.sourceTargets[]` before searching. Every ordinary scan has an eight-source minimum plan: one target each for `web-search`, `seek`, `linkedin`, and `trade-me`, plus four distinct public employer or ATS inventories. Use `channel` to identify each target. LinkedIn, SEEK and Trade Me may be `blocked` or `discovery-only`, but they must still be planned and their limitation recorded; do not silently omit them. Use one employer/ATS target per named employer; never group several employers under one URL. For programme-first scans, add a programme-inventory target whose public listing collection is broad enough to expose generic early-career titles. Record `inventoryScope`, the exact target URL, every inspected `itemUrls` entry, and the matching `itemsInspected` count, including zero. Set each target to `searched`, `discovery-only`, `blocked`, `unavailable`, or `skipped` after the run. An aggregator, unrelated overseas inventory, single job detail page, event page, or search snippet is not a completed employer or Auckland/New Zealand programme inventory.
 
 When the user explicitly permits technical volunteering, set `preferences.includeTechnicalVolunteer: true`, add a technical-volunteer source target, and search only for roles with clearly stated software, QA, automation, backend, platform, developer-productivity, or software-support duties. Record `engagementModel: "volunteer"`, `isTechnicalVolunteer: true`, and whether it is paid, unpaid, reimbursed, or unknown. Do not label a general community, event, fundraising, or administrative role as technical. Never present volunteer work as paid employment.
 
@@ -113,7 +113,7 @@ Do not set coverage status manually. The runtime derives `complete`, `partial`, 
 - `blocked` or `unavailable`: access failed;
 - `skipped`: deliberately not searched, with a reason.
 
-Do not describe a run as complete merely because each family has one generic `searched` attempt.
+Do not describe a run as complete merely because each family has one generic `searched` attempt. A run missing any baseline discovery channel or fewer than four distinct public employer/ATS inventories is partial even if other attempts succeeded.
 
 ### Structured public evidence
 

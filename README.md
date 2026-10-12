@@ -2,7 +2,7 @@
 
 A Claude Code plugin that reads a resume, finds recent genuinely matching New Zealand roles, and creates an actionable Markdown report.
 
-> Status: **0.8.0 alpha — actionable job reports.** A recommendation needs a recent verified employer/ATS vacancy page and either a direct online application URL or an explicit email application route with instructions.
+> Status: **0.8.1 alpha — actionable job reports.** A recommendation needs a recent verified employer/ATS vacancy page and either a direct online application URL or an explicit email application route with instructions.
 
 ## What works now
 
@@ -25,7 +25,7 @@ A Claude Code plugin that reads a resume, finds recent genuinely matching New Ze
 - preserves every role family explicitly requested by the user instead of allowing CV recency to silently remove it;
 - expands a relevant employer's current vacancy inventory when any related role reveals that employer;
 - requires both discovery routes and required employer expansions before reporting complete coverage;
-- requires every planned public source target to be completed before reporting complete coverage;
+- requires a baseline plan of web search, SEEK, LinkedIn, Trade Me Jobs, and four distinct public employer/ATS inventories; any blocked or omitted baseline source makes coverage partial;
 - distinguishes complete, partial, and blocked searches so access failures are never reported as “no vacancies”;
 - separates internship/graduate programme type, contract type, and full-/part-time workload;
 - checks structured availability windows, work rights, and hard versus preferred eligibility requirements;
@@ -48,7 +48,7 @@ The default posting window is 30 days and can be overridden.
 
 ## Personal search state
 
-Version 0.8.0 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
+Version 0.8.1 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
 
 The file is ignored by Git and is not included in the marketplace package. It contains no credentials or browser state.
 

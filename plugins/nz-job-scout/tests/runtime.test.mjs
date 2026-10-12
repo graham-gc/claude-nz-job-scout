@@ -111,8 +111,8 @@ function leadFor(job, overrides = {}) {
 function session(jobs = [activeJob()], overrides = {}) {
   const leads = jobs.map((job) => leadFor(job));
   return {
-    pluginVersion: '0.8.0',
-    sessionSchemaVersion: 5,
+    pluginVersion: '0.8.1',
+    sessionSchemaVersion: 6,
     resumeFingerprint,
     candidate: structuredClone(candidate),
     preferences: {
@@ -128,9 +128,15 @@ function session(jobs = [activeJob()], overrides = {}) {
       explicitSearchFamilies: ['software support'],
       programmeFirstRequired: true,
       sourceTargets: [
-        { name: 'Public board discovery', purpose: 'board-discovery', status: 'searched', url: 'https://jobs.example.nz/search', inventoryScope: 'search-results', itemUrls: ['https://jobs.example.nz/1'], itemsInspected: 1, requiredForCoverage: true },
-        { name: 'Auckland student programme inventory', purpose: 'programme-inventory', status: 'searched', url: 'https://careers.example.nz/students', inventoryScope: 'listing-page', itemUrls: ['https://careers.example.nz/students/1'], itemsInspected: 1, requiredForCoverage: true },
-        { name: 'Example Engineering ATS inventory', purpose: 'employer-ats', employer: 'Example Engineering', status: 'searched', url: 'https://careers.example.com/jobs', inventoryScope: 'ats-board', itemUrls: ['https://careers.example.com/jobs/NZ-101'], itemsInspected: 1, requiredForCoverage: true },
+        { name: 'Web search discovery', channel: 'web-search', purpose: 'board-discovery', status: 'searched', url: 'https://www.google.com/search?q=software+intern+auckland', inventoryScope: 'search-results', itemUrls: ['https://jobs.example.nz/1'], itemsInspected: 1, requiredForCoverage: true },
+        { name: 'SEEK discovery', channel: 'seek', purpose: 'board-discovery', status: 'searched', url: 'https://nz.seek.com/jobs-in-auckland', inventoryScope: 'search-results', itemUrls: [], itemsInspected: 0, requiredForCoverage: true },
+        { name: 'LinkedIn Jobs discovery', channel: 'linkedin', purpose: 'board-discovery', status: 'blocked', url: 'https://www.linkedin.com/jobs/search/?location=Auckland%2C%20New%20Zealand', inventoryScope: 'search-results', itemUrls: [], itemsInspected: 0, requiredForCoverage: true, note: 'Example access restriction' },
+        { name: 'Trade Me Jobs discovery', channel: 'trade-me', purpose: 'board-discovery', status: 'searched', url: 'https://www.trademe.co.nz/a/jobs/search?search_string=software', inventoryScope: 'search-results', itemUrls: [], itemsInspected: 0, requiredForCoverage: true },
+        { name: 'Auckland student programme inventory', channel: 'programme', purpose: 'programme-inventory', status: 'searched', url: 'https://careers.example.nz/students', inventoryScope: 'listing-page', itemUrls: ['https://careers.example.nz/students/1'], itemsInspected: 1, requiredForCoverage: true },
+        { name: 'Example Engineering ATS inventory', channel: 'public-ats', purpose: 'employer-ats', employer: 'Example Engineering', status: 'searched', url: 'https://careers.example.com/jobs', inventoryScope: 'ats-board', itemUrls: ['https://careers.example.com/jobs/NZ-101'], itemsInspected: 1, requiredForCoverage: true },
+        { name: 'Example Systems careers inventory', channel: 'employer-careers', purpose: 'employer-ats', employer: 'Example Systems', status: 'searched', url: 'https://jobs.example-systems.com/openings', inventoryScope: 'listing-page', itemUrls: [], itemsInspected: 0, requiredForCoverage: true },
+        { name: 'Example Digital ATS inventory', channel: 'public-ats', purpose: 'employer-ats', employer: 'Example Digital', status: 'searched', url: 'https://apply.example-digital.com/jobs', inventoryScope: 'ats-board', itemUrls: [], itemsInspected: 0, requiredForCoverage: true },
+        { name: 'Example Cloud careers inventory', channel: 'employer-careers', purpose: 'employer-ats', employer: 'Example Cloud', status: 'searched', url: 'https://careers.example-cloud.com/vacancies', inventoryScope: 'listing-page', itemUrls: [], itemsInspected: 0, requiredForCoverage: true },
       ],
       attempts: [
         { roleFamily: 'student technology programmes', strategy: 'programme-discovery', source: 'Public programme inventories', query: 'Auckland internship and student technology opportunities', status: 'searched', leadsDiscovered: leads.length, detailPagesOpened: leads.length },
@@ -160,7 +166,7 @@ test('validates the structured evidence session', () => {
 test('rejects stale sessions and incomplete programme-first plans', () => {
   const stale = session();
   stale.pluginVersion = '0.5.1';
-  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.8\.0/);
+  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.8\.1/);
 
   const missingProgrammePlan = session();
   missingProgrammePlan.searchCoverage.sourceTargets = missingProgrammePlan.searchCoverage.sourceTargets.filter((target) => target.purpose !== 'programme-inventory');
@@ -178,6 +184,18 @@ test('requires the baseline public-source plan', () => {
   const invalid = session();
   invalid.searchCoverage.sourceTargets = invalid.searchCoverage.sourceTargets.filter((target) => target.purpose !== 'employer-ats');
   assert.match(validateSession(invalid).errors.join('\n'), /needs an employer-ats target/);
+});
+
+test('requires LinkedIn discovery and four distinct primary inventories', () => {
+  const missingLinkedIn = session();
+  missingLinkedIn.searchCoverage.sourceTargets = missingLinkedIn.searchCoverage.sourceTargets
+    .filter((target) => target.channel !== 'linkedin');
+  assert.match(validateSession(missingLinkedIn).errors.join('\n'), /linkedin baseline discovery target/);
+
+  const tooFewInventories = session();
+  tooFewInventories.searchCoverage.sourceTargets = tooFewInventories.searchCoverage.sourceTargets
+    .filter((target) => !['Example Systems', 'Example Digital', 'Example Cloud'].includes(target.employer));
+  assert.match(validateSession(tooFewInventories).errors.join('\n'), /4 distinct public employer or ATS inventories/);
 });
 
 test('keeps a date-only closing deadline active for the whole Auckland day', () => {
@@ -265,7 +283,11 @@ test('requires expansion of a relevant employer discovered outside its inventory
     employerExpansionReason: 'A related role was discovered on a public job board',
   });
   const coverage = {
+    ...structuredClone(session().searchCoverage),
     searchFamilies: ['software test engineering'],
+    explicitSearchFamilies: [],
+    programmeFirstRequired: false,
+    sourceTargets: structuredClone(session().searchCoverage.sourceTargets).map((target) => ({ ...target, status: 'searched' })),
     attempts: [
       { roleFamily: 'software test engineering', strategy: 'broad-discovery', source: 'Web search', query: 'software testing intern Auckland', status: 'searched' },
       { roleFamily: 'software test engineering', strategy: 'source-inventory', source: 'Public job board', query: 'Auckland testing internships', status: 'searched' },
@@ -378,8 +400,9 @@ test('renders a concise report with a clear direct application route', () => {
   assert.match(markdown, /## Scan notes/);
   assert.match(markdown, /Vacancy page: \[Open job description\]/);
   assert.match(markdown, /Apply online: \[Open application\]/);
-  assert.match(markdown, /Plugin version: 0\.8\.0/);
-  assert.match(markdown, /Session schema: 5/);
+  assert.match(markdown, /Plugin version: 0\.8\.1/);
+  assert.match(markdown, /Session schema: 6/);
+  assert.match(markdown, /Baseline sources completed:/);
   assert.doesNotMatch(markdown, /### Search attempts/);
 });
 
@@ -451,11 +474,11 @@ test('does not let unresolved discovery leads pollute the actionable report', ()
 
 test('rejects aggregator employer inventories and fake programme inventories', () => {
   const aggregator = session();
-  aggregator.searchCoverage.sourceTargets[2].url = 'https://omnijobs.io/jobs/example';
+  aggregator.searchCoverage.sourceTargets[5].url = 'https://omnijobs.io/jobs/example';
   assert.match(validateSession(aggregator).errors.join('\n'), /public employer or ATS inventory/);
 
   const eventPage = session();
-  eventPage.searchCoverage.sourceTargets[1].inventoryScope = 'event-page';
+  eventPage.searchCoverage.sourceTargets[4].inventoryScope = 'event-page';
   assert.match(validateSession(eventPage).errors.join('\n'), /cannot use a event-page as a programme inventory/);
 });
 

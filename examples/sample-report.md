@@ -1,7 +1,7 @@
 # New Zealand Job Scout Report
 
 Generated: 2 Sept 2026, 10:29:20 am NZST (Pacific/Auckland)
-Plugin version: 0.8.0
+Plugin version: 0.8.1
 Session schema: 4
 
 <!-- nz-job-scout:context {"mode":"profile","resumeFingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","criteriaFingerprint":"example","scanContextFingerprint":"example"} -->
