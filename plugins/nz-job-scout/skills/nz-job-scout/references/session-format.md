@@ -16,8 +16,8 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.8.0",
-  "sessionSchemaVersion": 5,
+  "pluginVersion": "0.8.1",
+  "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
     "name": "Example Candidate",
@@ -107,10 +107,11 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
     "programmeFirstRequired": true,
     "sourceTargets": [
       {
-        "name": "Public job-board discovery",
+        "name": "Web search discovery",
+        "channel": "web-search",
         "purpose": "board-discovery",
         "status": "searched",
-        "url": "https://jobs.example.nz/search",
+        "url": "https://www.google.com/search?q=software+intern+auckland",
         "inventoryScope": "search-results",
         "itemUrls": ["https://jobs.example.nz/job/example-engineering-nz-101"],
         "itemsInspected": 1,
@@ -118,7 +119,43 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         "note": "Public result pages and indexed leads inspected"
       },
       {
+        "name": "SEEK discovery",
+        "channel": "seek",
+        "purpose": "board-discovery",
+        "status": "blocked",
+        "url": "https://nz.seek.com/jobs-in-auckland",
+        "inventoryScope": "search-results",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true,
+        "note": "Anonymous access was restricted"
+      },
+      {
+        "name": "LinkedIn Jobs discovery",
+        "channel": "linkedin",
+        "purpose": "board-discovery",
+        "status": "blocked",
+        "url": "https://www.linkedin.com/jobs/search/?location=Auckland%2C%20New%20Zealand",
+        "inventoryScope": "search-results",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true,
+        "note": "Anonymous access was restricted"
+      },
+      {
+        "name": "Trade Me Jobs discovery",
+        "channel": "trade-me",
+        "purpose": "board-discovery",
+        "status": "searched",
+        "url": "https://www.trademe.co.nz/a/jobs/search?search_string=software",
+        "inventoryScope": "search-results",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true
+      },
+      {
         "name": "Auckland student programme inventory",
+        "channel": "programme",
         "purpose": "programme-inventory",
         "status": "searched",
         "url": "https://careers.example.nz/students",
@@ -130,6 +167,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
       },
       {
         "name": "Example Engineering public ATS inventory",
+        "channel": "public-ats",
         "purpose": "employer-ats",
         "employer": "Example Engineering",
         "status": "searched",
@@ -139,6 +177,42 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
         "itemsInspected": 1,
         "requiredForCoverage": true,
         "note": "Public employer and ATS vacancy inventories inspected"
+      },
+      {
+        "name": "Example Systems careers inventory",
+        "channel": "employer-careers",
+        "purpose": "employer-ats",
+        "employer": "Example Systems",
+        "status": "searched",
+        "url": "https://jobs.example-systems.com/openings",
+        "inventoryScope": "listing-page",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true
+      },
+      {
+        "name": "Example Digital public ATS inventory",
+        "channel": "public-ats",
+        "purpose": "employer-ats",
+        "employer": "Example Digital",
+        "status": "searched",
+        "url": "https://apply.example-digital.com/jobs",
+        "inventoryScope": "ats-board",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true
+      },
+      {
+        "name": "Example Cloud careers inventory",
+        "channel": "employer-careers",
+        "purpose": "employer-ats",
+        "employer": "Example Cloud",
+        "status": "searched",
+        "url": "https://careers.example-cloud.com/vacancies",
+        "inventoryScope": "listing-page",
+        "itemUrls": [],
+        "itemsInspected": 0,
+        "requiredForCoverage": true
       }
     ],
     "attempts": [

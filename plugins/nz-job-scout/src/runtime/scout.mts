@@ -10,8 +10,8 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PLUGIN_VERSION = '0.8.0';
-export const SESSION_SCHEMA_VERSION = 5;
+export const PLUGIN_VERSION = '0.8.1';
+export const SESSION_SCHEMA_VERSION = 6;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
 const CONCEPT_GROUPS = [
@@ -37,6 +37,8 @@ const BLOCKED_AGGREGATORS = [
   'omnijobs.', 'alion.io', 'hiringcafe.', 'freehire.',
 ];
 const DISCOVERY_ONLY_HOSTS = ['seek.', 'linkedin.', 'indeed.'];
+const BASELINE_DISCOVERY_CHANNELS = ['web-search', 'seek', 'linkedin', 'trade-me'];
+const MINIMUM_PRIMARY_INVENTORIES = 4;
 const DAILY_REPORT_PATTERN = /^nz-jobs-(\d{4}-\d{2}-\d{2})(?:-[a-f0-9]{8})?\.md$/;
 const ITEM_MARKER = /<!-- nz-job-scout:item (\{.+?\}) -->/g;
 const CONTEXT_MARKER = /<!-- nz-job-scout:context (\{.+?\}) -->/;
@@ -324,13 +326,19 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
     .filter((target) => target.requiredForCoverage !== false && target.status !== 'searched')
     .map((target) => asText(target.name))
     .filter(Boolean);
+  const missingBaselineDiscoveryChannels = BASELINE_DISCOVERY_CHANNELS.filter((channel) =>
+    !sourceTargets.some((target) => target.channel === channel));
+  const primaryInventories = sourceTargets.filter((target) => target.purpose === 'employer-ats');
+  const distinctPrimaryInventories = new Set(primaryInventories.map((target) => normalise(target.employer)).filter(Boolean));
+  const missingPrimaryInventories = Math.max(0, MINIMUM_PRIMARY_INVENTORIES - distinctPrimaryInventories.size);
   const missingExplicitFamilies = explicitFamilies.filter((explicitFamily) =>
     !families.some((family) => normalise(family) === normalise(explicitFamily)));
   const missingProgrammeDiscovery = programmeFirstRequired && !searched.some((attempt) => attempt.strategy === 'programme-discovery');
   const missingProgrammeInventory = programmeFirstRequired && !sourceTargets.some((target) =>
     target.purpose === 'programme-inventory' && target.status === 'searched');
   const incompletePlan = missingBroadDiscoveryFamilies.length || missingSourceInventoryFamilies.length || unexpandedEmployers.length
-    || missingRequiredSourceTargets.length || missingExplicitFamilies.length || missingProgrammeDiscovery || missingProgrammeInventory;
+    || missingRequiredSourceTargets.length || missingBaselineDiscoveryChannels.length || missingPrimaryInventories
+    || missingExplicitFamilies.length || missingProgrammeDiscovery || missingProgrammeInventory;
   const status = searched.length === 0 ? 'blocked' : materialFailures.length || incompletePlan ? 'partial' : 'complete';
   const leadList = asArray(leads);
   return {
@@ -346,6 +354,10 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
     unexpandedEmployers,
     sourceTargets,
     missingRequiredSourceTargets,
+    missingBaselineDiscoveryChannels,
+    primaryInventoriesPlanned: distinctPrimaryInventories.size,
+    primaryInventoriesRequired: MINIMUM_PRIMARY_INVENTORIES,
+    missingPrimaryInventories,
     explicitSearchFamilies: explicitFamilies,
     missingExplicitFamilies,
     programmeFirstRequired,
@@ -399,10 +411,12 @@ export function validateSession(session) {
       if (attempt?.strategy === 'employer-expansion') requiredString(attempt?.employer, `searchCoverage.attempts[${index}].employer`, errors);
     });
     const targetPurposes = new Set(['board-discovery', 'programme-inventory', 'employer-ats', 'technical-volunteer']);
+    const targetChannels = new Set(['web-search', 'seek', 'linkedin', 'trade-me', 'employer-careers', 'public-ats', 'programme', 'technical-volunteer']);
     const inventoryScopes = new Set(['listing-page', 'ats-board', 'search-results', 'single-detail', 'event-page']);
     asArray(session.searchCoverage.sourceTargets).forEach((target, index) => {
       requiredString(target?.name, `searchCoverage.sourceTargets[${index}].name`, errors);
       requiredString(target?.url, `searchCoverage.sourceTargets[${index}].url`, errors);
+      if (!targetChannels.has(target?.channel)) errors.push(`searchCoverage.sourceTargets[${index}].channel is invalid`);
       if (target?.url) {
         try { new URL(target.url); }
         catch { errors.push(`searchCoverage.sourceTargets[${index}].url must be an absolute URL`); }
@@ -426,12 +440,21 @@ export function validateSession(session) {
         requiredString(target?.employer, `searchCoverage.sourceTargets[${index}].employer`, errors);
         if (!['listing-page', 'ats-board'].includes(target?.inventoryScope)) errors.push(`searchCoverage.sourceTargets[${index}] employer-ats must be a listing-page or ats-board`);
         if (hostMatches(target?.url, [...BLOCKED_AGGREGATORS, ...DISCOVERY_ONLY_HOSTS])) errors.push(`searchCoverage.sourceTargets[${index}] employer-ats must use a public employer or ATS inventory, not a discovery or aggregator host`);
+        if (!['employer-careers', 'public-ats'].includes(target?.channel)) errors.push(`searchCoverage.sourceTargets[${index}] employer-ats must use employer-careers or public-ats channel`);
       }
     });
     const plannedPurposes = new Set(asArray(session.searchCoverage.sourceTargets).map((target) => target.purpose));
     for (const purpose of ['board-discovery', 'employer-ats']) {
       if (!plannedPurposes.has(purpose)) errors.push(`searchCoverage.sourceTargets needs ${purpose === 'employer-ats' ? 'an' : 'a'} ${purpose} target`);
     }
+    for (const channel of BASELINE_DISCOVERY_CHANNELS) {
+      if (!asArray(session.searchCoverage.sourceTargets).some((target) => target.channel === channel)) errors.push(`searchCoverage.sourceTargets needs a ${channel} baseline discovery target`);
+    }
+    const inventoryEmployers = new Set(asArray(session.searchCoverage.sourceTargets)
+      .filter((target) => target.purpose === 'employer-ats')
+      .map((target) => normalise(target.employer))
+      .filter(Boolean));
+    if (inventoryEmployers.size < MINIMUM_PRIMARY_INVENTORIES) errors.push(`searchCoverage.sourceTargets needs ${MINIMUM_PRIMARY_INVENTORIES} distinct public employer or ATS inventories`);
     if (session.preferences?.includeTechnicalVolunteer === true && !plannedPurposes.has('technical-volunteer')) errors.push('Technical volunteer searches need a technical-volunteer source target');
     if (session.searchCoverage.programmeFirstRequired === true) {
       if (!asArray(session.searchCoverage.attempts).some((attempt) => attempt.strategy === 'programme-discovery')) errors.push('programmeFirstRequired needs a programme-discovery attempt');
@@ -1038,6 +1061,10 @@ function table(items, fitLabel = 'Role fit') {
 export function renderMarkdown(report) {
   const coverage = report.searchCoverage;
   const restrictedSources = asArray(coverage.sourceTargets).filter((source) => source.status !== 'searched');
+  const completedBaselineSources = BASELINE_DISCOVERY_CHANNELS.filter((channel) =>
+    asArray(coverage.sourceTargets).some((source) => source.channel === channel && source.status === 'searched')).length
+    + asArray(coverage.sourceTargets).filter((source) => source.purpose === 'employer-ats' && source.status === 'searched').length;
+  const plannedBaselineSources = BASELINE_DISCOVERY_CHANNELS.length + (coverage.primaryInventoriesPlanned ?? 0);
   const lines = [
     '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`,
     `Plugin version: ${report.pluginVersion} · Session schema: ${report.sessionSchemaVersion}`,
@@ -1063,8 +1090,12 @@ export function renderMarkdown(report) {
     report.stretch.forEach((job, index) => lines.push(...renderJobDetails(job, `### ${index + 1}. ${job.title} — ${job.employer}`), jobMarker(job)));
   }
   lines.push('', '## Scan notes', '');
+  lines.push(`- Baseline sources completed: ${completedBaselineSources}/${plannedBaselineSources} (4 discovery channels + ${coverage.primaryInventoriesRequired ?? MINIMUM_PRIMARY_INVENTORIES} public employer/ATS inventories required)`);
   lines.push(`- Public sources checked: ${coverage.sourceTargets.filter((source) => source.status === 'searched').map((source) => `[${source.name}](${source.url})`).join(', ') || 'none'}`);
   if (restrictedSources.length) lines.push(`- Restricted or skipped sources: ${restrictedSources.map((source) => `${source.name}${source.note ? ` — ${source.note}` : ''}`).join('; ')}`);
+  if (coverage.missingBaselineDiscoveryChannels?.length) lines.push(`- Missing required discovery channels: ${coverage.missingBaselineDiscoveryChannels.join(', ')}`);
+  if (coverage.missingPrimaryInventories) lines.push(`- Missing public employer/ATS inventories: ${coverage.missingPrimaryInventories}`);
+  lines.push(`- Search activity: ${coverage.leadsDiscovered} leads found; ${coverage.detailPagesOpened} detail pages opened; ${report.searchedCount} listings assessed.`);
   lines.push(`- Not included: ${report.rejected.length + report.manualVerification.length} roles without a recent verified primary vacancy page or usable application route.`);
   lines.push('', '<!-- NZ Job Scout state metadata: used only for incremental reports -->');
   return `${lines.join('\n')}\n`;
