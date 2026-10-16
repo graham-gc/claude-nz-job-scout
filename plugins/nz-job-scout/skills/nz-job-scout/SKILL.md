@@ -25,7 +25,7 @@ Find real, currently available New Zealand vacancies and assess them against the
 
 The skill exists for one closed loop: **resume → suitable current jobs → an immediately usable application path**.
 
-Accept a PDF or Markdown resume, optional natural-language criteria, or both. A resume-only request uses the role families and locations that are clearly supported by the resume. Explicit criteria narrow or extend that scope. Default to vacancies posted within 30 days.
+Accept a PDF or Markdown resume, optional natural-language criteria, or both. A resume-only request uses the role families and locations that are clearly supported by the resume. Explicit criteria narrow or extend that scope. Default to vacancies posted within the last 7 days, unless the user explicitly requests another window.
 
 Do not invent location, availability, work-right, technology, or employment-type restrictions. Ask one short question only if the missing fact would materially change which roles are eligible.
 
@@ -75,11 +75,13 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.1"` and `sessionSchemaVersion: 6`. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.2"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
 Build search families from the user's explicit request plus sustained responsibility areas in the resume. Use a small number of broad role, programme and location queries; do not attempt to enumerate title-and-skill combinations. A role title is only a lead—read its duties before deciding fit.
+
+Apply the requested posting window during discovery whenever a source offers a reliable posted-date filter (7 days by default). Still inspect broad public inventories to avoid missing generic titles, but recommend only vacancies whose exact employer/ATS page verifies a posting date inside the window. Do not treat a search-index date, crawl date, or page update date as the vacancy's posting date. Keep undated leads unverified rather than calling them new.
 
 When the request includes internships, graduate roles, studentships, placements, fixed-term student work, part-time student work, or summer work, set `programmeFirstRequired: true` and perform a `programme-discovery` pass before stack-specific searching. Inspect broad student and early-career programme inventories without CV technology terms. Capture every plausibly technical vacancy first, including generic titles such as Technology Services Intern, Digital Services Intern, Systems Intern, ICT Intern, Service Management Intern, and Application Support Intern. Rank or reject them only after reading their duties. A title that omits “software”, “Java”, “QA”, or “automation” must not be discarded before duty review.
 

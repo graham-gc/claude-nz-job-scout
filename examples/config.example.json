@@ -2,7 +2,7 @@
   "resumePath": "/Users/your-name/Career/CV.pdf",
   "search": {
     "mode": "profile",
-    "maxPostingAgeDays": 30,
+    "maxPostingAgeDays": 7,
     "includeUnverified": true,
     "constraints": [
       { "field": "programmeType", "value": "internship", "strength": "hard", "source": "user-explicit" },

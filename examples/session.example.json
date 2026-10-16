@@ -1,5 +1,5 @@
 {
-  "pluginVersion": "0.8.1",
+  "pluginVersion": "0.8.2",
   "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
@@ -34,7 +34,7 @@
   "preferences": {
     "mode": "profile",
     "keywords": [],
-    "maxPostingAgeDays": 30,
+    "maxPostingAgeDays": 7,
     "includeUnverified": true,
     "constraints": [
       { "field": "programmeType", "value": "internship", "strength": "hard", "source": "conversation-context" },

@@ -77,7 +77,7 @@ function activeJob(overrides = {}) {
     requirements: [{ category: 'study', text: 'Currently studying at a New Zealand tertiary institution', strength: 'hard', compatibility: 'met', evidenceSource: 'resume' }],
     workRightsRequirement: { country: 'New Zealand', requiresCurrentRights: true, requiresUnrestricted: false },
     dateEvidence: {
-      postedAt: [observation('2026-08-25')],
+      postedAt: [observation('2026-08-26')],
       closesAt: [observation('2026-09-30')],
       startAt: [observation('2026-11-16')],
       endAt: [observation('2027-02-12')],
@@ -111,12 +111,12 @@ function leadFor(job, overrides = {}) {
 function session(jobs = [activeJob()], overrides = {}) {
   const leads = jobs.map((job) => leadFor(job));
   return {
-    pluginVersion: '0.8.1',
+    pluginVersion: '0.8.2',
     sessionSchemaVersion: 6,
     resumeFingerprint,
     candidate: structuredClone(candidate),
     preferences: {
-      mode: 'profile', maxPostingAgeDays: 30, includeUnverified: true,
+      mode: 'profile', maxPostingAgeDays: 7, includeUnverified: true,
       constraints: [
         { field: 'programmeType', value: 'internship', strength: 'hard', source: 'user-explicit' },
         { field: 'location', value: 'Auckland', strength: 'hard', source: 'user-explicit' },
@@ -166,7 +166,7 @@ test('validates the structured evidence session', () => {
 test('rejects stale sessions and incomplete programme-first plans', () => {
   const stale = session();
   stale.pluginVersion = '0.5.1';
-  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.8\.1/);
+  assert.match(validateSession(stale).errors.join('\n'), /pluginVersion must be 0\.8\.2/);
 
   const missingProgrammePlan = session();
   missingProgrammePlan.searchCoverage.sourceTargets = missingProgrammePlan.searchCoverage.sourceTargets.filter((target) => target.purpose !== 'programme-inventory');
@@ -202,6 +202,31 @@ test('keeps a date-only closing deadline active for the whole Auckland day', () 
   const job = activeJob({ dateEvidence: { ...activeJob().dateEvidence, closesAt: [observation('2026-09-01')] } });
   assert.equal(classifyVerification(job, session().preferences, new Date('2026-09-01T23:59:59+12:00')).status, 'verified-active');
   assert.equal(classifyVerification(job, session().preferences, new Date('2026-09-02T00:00:01+12:00')).status, 'closed');
+});
+
+test('defaults to seven-day posting freshness and respects an explicit override', () => {
+  const now = new Date('2026-09-01T10:00:00+12:00');
+  const dateEvidence = activeJob().dateEvidence;
+  const boundary = activeJob({ dateEvidence: { ...dateEvidence, postedAt: [observation('2026-08-25')] } });
+  const stale = activeJob({ dateEvidence: { ...dateEvidence, postedAt: [observation('2026-08-24')] } });
+  assert.equal(classifyVerification(boundary, {}, now).status, 'verified-active');
+  assert.equal(classifyVerification(stale, {}, now).status, 'rejected');
+  assert.equal(classifyVerification(stale, { maxPostingAgeDays: 30 }, now).status, 'verified-active');
+});
+
+test('rejects timestamped listings immediately after seven full days', () => {
+  const now = new Date('2026-09-01T10:00:00+12:00');
+  const dateEvidence = activeJob().dateEvidence;
+  const boundary = activeJob({ dateEvidence: { ...dateEvidence, postedAt: [observation('2026-08-25T10:00:00+12:00')] } });
+  const stale = activeJob({ dateEvidence: { ...dateEvidence, postedAt: [observation('2026-08-25T09:59:00+12:00')] } });
+  assert.equal(classifyVerification(boundary, {}, now).status, 'verified-active');
+  assert.equal(classifyVerification(stale, {}, now).status, 'rejected');
+});
+
+test('does not verify a posting date in the future', () => {
+  const dateEvidence = activeJob().dateEvidence;
+  const future = activeJob({ dateEvidence: { ...dateEvidence, postedAt: [observation('2026-09-02')] } });
+  assert.equal(classifyVerification(future, {}, new Date('2026-09-01T10:00:00+12:00')).status, 'unverified');
 });
 
 test('treats conflicting date evidence as unverified', () => {
@@ -400,7 +425,7 @@ test('renders a concise report with a clear direct application route', () => {
   assert.match(markdown, /## Scan notes/);
   assert.match(markdown, /Vacancy page: \[Open job description\]/);
   assert.match(markdown, /Apply online: \[Open application\]/);
-  assert.match(markdown, /Plugin version: 0\.8\.1/);
+  assert.match(markdown, /Plugin version: 0\.8\.2/);
   assert.match(markdown, /Session schema: 6/);
   assert.match(markdown, /Baseline sources completed:/);
   assert.doesNotMatch(markdown, /### Search attempts/);

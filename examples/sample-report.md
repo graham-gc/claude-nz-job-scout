@@ -1,15 +1,15 @@
 # New Zealand Job Scout Report
 
 Generated: 2 Sept 2026, 10:29:20 am NZST (Pacific/Auckland)
-Plugin version: 0.8.1
-Session schema: 4
+Plugin version: 0.8.2
+Session schema: 6
 
 <!-- nz-job-scout:context {"mode":"profile","resumeFingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","criteriaFingerprint":"example","scanContextFingerprint":"example"} -->
 
 ## Search criteria
 
 - Mode: profile
-- Posting age: 30 days
+- Posting age: 7 days
 - Leads discovered: 1
 - Detail pages opened: 1
 - Listings assessed with evidence: 1

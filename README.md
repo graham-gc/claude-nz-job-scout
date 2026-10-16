@@ -2,7 +2,7 @@
 
 A Claude Code plugin that reads a resume, finds recent genuinely matching New Zealand roles, and creates an actionable Markdown report.
 
-> Status: **0.8.1 alpha — actionable job reports.** A recommendation needs a recent verified employer/ATS vacancy page and either a direct online application URL or an explicit email application route with instructions.
+> Status: **0.8.2 alpha — actionable job reports.** A recommendation needs a recent verified employer/ATS vacancy page and either a direct online application URL or an explicit email application route with instructions.
 
 ## What works now
 
@@ -44,11 +44,11 @@ A Claude Code plugin that reads a resume, finds recent genuinely matching New Ze
 - rejects unsupported claims of unrestricted or post-study work rights;
 - ignores verification timestamps when deciding whether an unchanged related opportunity should reappear.
 
-The default posting window is 30 days and can be overridden.
+The default posting window is 7 days and can be overridden explicitly.
 
 ## Personal search state
 
-Version 0.8.1 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
+Version 0.8.2 supports a project-local `.nz-job-scout-state.json` file for role-specific decisions. When a user explicitly says that a role was applied to, rejected, closed, or not wanted, the Skill records that role by employer plus title, requisition ID, or canonical URL. Future scans and the report runtime exclude the matching role while leaving other vacancies from the same employer eligible.
 
 The file is ignored by Git and is not included in the marketplace package. It contains no credentials or browser state.
 
@@ -119,7 +119,7 @@ Then invoke the namespaced skill:
 
 ### 1. Resume-driven search
 
-Provide a local PDF or Markdown resume and no additional job criteria. The Skill derives suitable role families from sustained experience and searches current New Zealand vacancies posted in the last 30 days.
+Provide a local PDF or Markdown resume and no additional job criteria. The Skill derives suitable role families from sustained experience and searches current New Zealand vacancies posted in the last 7 days.
 
 ```text
 /nz-job-scout:nz-job-scout Use my resume at <absolute-path-to-your-resume> to find the best-matching current New Zealand jobs.
@@ -138,10 +138,10 @@ A resume is not required. State any combination of role, keywords, location, emp
 Provide both. Explicit criteria constrain the search, while the resume is used to assess genuine experience depth and rank the results.
 
 ```text
-/nz-job-scout:nz-job-scout Use my resume at <absolute-path-to-your-resume> and find paid Auckland internships or part-time test automation roles posted in the last 30 days.
+/nz-job-scout:nz-job-scout Use my resume at <absolute-path-to-your-resume> and find paid Auckland internships or part-time test automation roles posted in the last 7 days.
 ```
 
-Replace `<absolute-path-to-your-resume>` with the path to the user's own local resume. All three forms accept natural language; users do not need to declare a mode. The default posting window is 30 days, and every returned vacancy must still be open and directly verifiable.
+Replace `<absolute-path-to-your-resume>` with the path to the user's own local resume. All three forms accept natural language; users do not need to declare a mode. The default posting window is 7 days, and every returned vacancy must still be open and directly verifiable.
 
 ## How it works
 
