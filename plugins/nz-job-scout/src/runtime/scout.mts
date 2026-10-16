@@ -10,7 +10,7 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PLUGIN_VERSION = '0.8.1';
+export const PLUGIN_VERSION = '0.8.2';
 export const SESSION_SCHEMA_VERSION = 6;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
@@ -88,7 +88,7 @@ function postingAgeDays(value, now) {
     const today = Date.parse(`${aucklandDateKey(now)}T00:00:00Z`);
     return Math.floor((today - Date.parse(`${value}T00:00:00Z`)) / 86_400_000);
   }
-  return Math.floor((now.getTime() - parseDate(value, 'postedAt').getTime()) / 86_400_000);
+  return (now.getTime() - parseDate(value, 'postedAt').getTime()) / 86_400_000;
 }
 
 export function normaliseUrl(value) {
@@ -155,7 +155,7 @@ export function deriveScanContext(session) {
   const resumeFingerprint = asText(session.resumeFingerprint) || undefined;
   const criteriaFingerprint = fingerprint({
     keywords: asArray(session.preferences?.keywords),
-    maxPostingAgeDays: Number(session.preferences?.maxPostingAgeDays ?? 30),
+    maxPostingAgeDays: Number(session.preferences?.maxPostingAgeDays ?? 7),
     includeTechnicalVolunteer: session.preferences?.includeTechnicalVolunteer === true,
     constraints: asArray(session.preferences?.constraints),
     programmeTypes: asArray(session.preferences?.programmeTypes),
@@ -841,14 +841,14 @@ export function classifyVerification(job, preferences, now = new Date()) {
     conflicts.forEach(([field, result]) => reasons.push(`${field} has conflicting evidence: ${result.conflictingValues.join(' vs ')}`));
   }
   if (dates.closesAt.value && closingHasPassed(dates.closesAt.value, now)) { status = 'closed'; reasons.push(`Closing date ${dates.closesAt.value} has passed`); }
-  const maxAge = Number(preferences.maxPostingAgeDays ?? 30);
+  const maxAge = Number(preferences.maxPostingAgeDays ?? 7);
   if (!dates.postedAt.value) {
     if (status === 'verified-active') status = 'unverified';
     reasons.push('Posting date is unavailable or conflicting');
   } else {
     const age = postingAgeDays(dates.postedAt.value, now);
-    if (age > maxAge) { status = 'rejected'; reasons.push(`Posted ${age} days ago, outside the ${maxAge}-day window`); }
-    if (age < -1 && status === 'verified-active') { status = 'unverified'; reasons.push('Posting date is in the future'); }
+    if (age > maxAge) { status = 'rejected'; reasons.push(`Posting date ${dates.postedAt.value} is outside the ${maxAge}-day window`); }
+    if (age < 0 && status === 'verified-active') { status = 'unverified'; reasons.push('Posting date is in the future'); }
   }
   return { status, reasons: [...new Set(reasons)], dates };
 }
@@ -1072,7 +1072,7 @@ export function renderMarkdown(report) {
     '## Search', '',
     `- Resume used: ${report.scanContext.resumeFingerprint ? 'yes' : 'no'}`,
     `- Role families: ${coverage.searchFamilies.join(', ') || 'not specified'}`,
-    `- Posting window: ${report.preferences.maxPostingAgeDays ?? 30} days`,
+    `- Posting window: ${report.preferences.maxPostingAgeDays ?? 7} days`,
     `- Listings reviewed: ${report.searchedCount}`,
     `- Coverage: ${coverage.status}`, '',
     '## Ready to apply', '',
@@ -1109,7 +1109,7 @@ function renderLegacyMarkdown(report) {
     '# New Zealand Job Scout Report', '', `Generated: ${formatAucklandTime(report.generatedAt)}`,
     `Plugin version: ${report.pluginVersion}`, `Session schema: ${report.sessionSchemaVersion}`, '',
     `<!-- nz-job-scout:context ${JSON.stringify(report.scanContext)} -->`, '',
-    '## Search criteria', '', `- Mode: ${report.preferences.mode}`, `- Posting age: ${report.preferences.maxPostingAgeDays ?? 30} days`,
+    '## Search criteria', '', `- Mode: ${report.preferences.mode}`, `- Posting age: ${report.preferences.maxPostingAgeDays ?? 7} days`,
     `- Leads discovered: ${coverage.leadsDiscovered}`, `- Detail pages opened: ${coverage.detailPagesOpened}`,
     `- Listings assessed with evidence: ${report.searchedCount}`, `- Search families: ${coverage.searchFamilies.join(', ')}`,
     `- Queries run: ${coverage.queriesRun}`, `- Lead outcomes: ${leadBreakdown(report.leads)}`,
@@ -1249,7 +1249,7 @@ async function loadReportHistory(outputPath, now, maxPostingAgeDays, expectedCon
   const target = resolve(outputPath);
   const folder = dirname(target);
   const today = aucklandDateKey(now);
-  const earliest = shiftDateKey(today, -Math.max(1, Number(maxPostingAgeDays ?? 30)));
+  const earliest = shiftDateKey(today, -Math.max(1, Number(maxPostingAgeDays ?? 7)));
   let names = [];
   try { names = await readdir(folder); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }

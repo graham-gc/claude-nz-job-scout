@@ -16,7 +16,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.8.1",
+  "pluginVersion": "0.8.2",
   "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
@@ -71,7 +71,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
   "preferences": {
     "mode": "combined",
     "keywords": [],
-    "maxPostingAgeDays": 30,
+    "maxPostingAgeDays": 7,
     "includeUnverified": true,
     "constraints": [
       {
