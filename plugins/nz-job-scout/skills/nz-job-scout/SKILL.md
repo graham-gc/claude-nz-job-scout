@@ -74,7 +74,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.4"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.5"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -134,9 +134,11 @@ Collect confirmed supported ATS boards across the planned employers first. Query
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board 'https://job-boards.greenhouse.io/example-employer' --board 'https://example-employer.bamboohr.com/careers'
 ```
 
-Replace the example links with 1–10 distinct, confirmed ATS **board** URLs (not job details or endpoints). Use each URL as a literal `--board` value without tracking query or fragment. Submit exactly one Bash command per batch, with the plugin path already substituted by Claude Code. Do not introduce shell variables, assignments, loops, pipelines, redirects, or wrappers. The command itself handles batching and emits a compact JSON result for each input.
+Replace the example links with 1–10 distinct, confirmed ATS **board** URLs (not job details or endpoints). Use each URL as a literal `--board` value without tracking query or fragment. Submit exactly one Bash command per batch, with the plugin path already substituted by Claude Code. Read the compact JSON directly from the tool response. The adapter already filters clearly overseas listings and puts New Zealand leads first. Do not write its output to `/tmp`, redirect stderr, or add `python`, `node -e`, `jq`, `head`, another command, or a shell wrapper.
 
-Supported boards: Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and Workday (exact public host, including its wdN shard, and career-site path). Use each `ok` result as discovery evidence only; it does not verify a vacancy. Treat `blocked` and `unavailable` results as source limitations, not empty inventories. Skip `duplicate` entries and use the public-page fallback for unsupported boards. If the direct command needs approval and is denied, record the limitation and continue with accessible public pages; do not retry with a different shell script.
+Each `ok` result contains location counts and discovery leads only. Check plausible `unknown` leads on the original vacancy page; do not infer that remote or regional work permits New Zealand. If a board has `nextOffset`, use another direct call with `--board 'URL' --offset NEXT_OFFSET` (literal values) for that board. This offset only continues the leads returned by the current upstream inventory response. If `sourceMayHaveMore` is true or a needed page was not reviewed, do not count that inventory as fully checked: use the public careers page or record partial coverage.
+
+Supported boards: Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and Workday (exact public host, including its wdN shard, and career-site path). Treat `blocked` and `unavailable` as limitations, not empty inventories. Skip `duplicate` entries and use the public-page fallback for unsupported boards. If the direct command needs approval and is denied, record the limitation and continue with accessible public pages; do not retry with a different shell script.
 
 ## Build the evidence session
 

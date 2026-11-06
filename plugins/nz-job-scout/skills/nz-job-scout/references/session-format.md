@@ -16,7 +16,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.8.4",
+  "pluginVersion": "0.8.5",
   "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
