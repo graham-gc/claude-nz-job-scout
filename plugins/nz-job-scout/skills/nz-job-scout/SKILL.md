@@ -8,7 +8,7 @@ allowed-tools:
   - WebSearch
   - WebFetch
   - Bash(shasum -a 256 *)
-  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory --provider *)'
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input *)'
   - Bash(rm -- .nz-job-scout-session-*.json)
@@ -32,7 +32,7 @@ Read [references/session-format.md](references/session-format.md) before produci
 
 Use only anonymously accessible information. Never request, inspect, import, export, or retain cookies, passwords, tokens, browser storage, private profiles, logged-in sessions, paid extensions, or employer-only partner credentials.
 
-Use `WebSearch` to find leads and `WebFetch` to read the public employer careers page, vacancy, or linked ATS page. The bundled `inventory` command below is the only shell-based discovery route: use it only when a public link identifies a supported ATS and its employer account. Keep each approved command separate in the project directory. Do not improvise `curl`, `wget`, inline Node/Python, shell loops, pipelines, or guessed API paths to discover vacancies or recover missing page data.
+Use `WebSearch` to find leads and `WebFetch` to read the public employer careers page, vacancy, or linked ATS page. The bundled `inventory-batch` command below is the only shell-based discovery route. Use public ATS board links confirmed from employer careers pages, not provider or account guesses. Keep approved commands separate in the project directory. Do not improvise `curl`, `wget`, inline Node/Python, shell loops, pipelines, or guessed API paths to discover vacancies or recover missing page data.
 
 Prefer primary sources:
 
@@ -74,7 +74,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.3"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.4"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -128,13 +128,15 @@ Use the following evidence when the public page tools or bundled adapter expose 
 
 Structured data may support title, organisation, location, posting date, closing date, employment terms, and application URL. Record its source URL and `sourceType`; do not silently merge conflicting dates.
 
-For an identified supported ATS, use the bundled public adapter. Run it directly through Node using the plugin root; no global CLI lookup, shell wrapper, or change of directory is needed:
+Collect confirmed supported ATS boards across the planned employers first. Query them together using the bundled adapter. Run it directly through Node using the plugin root; no global CLI lookup, shell wrapper, or change of directory is needed:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory --provider PROVIDER --account ACCOUNT
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board 'https://job-boards.greenhouse.io/example-employer' --board 'https://example-employer.bamboohr.com/careers'
 ```
 
-Supported providers are Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday career sites. Derive the account and any needed `--host`, `--site`, or `--tenant` values from the public careers link; Workday requires the exact hostname, including its `wdN` shard. Add `--query` only to narrow an identified inventory. The adapter uses anonymous public endpoints, performs no retries or bypasses, and returns canonical inventory links as JSON. If the adapter is unsupported or returns an error, use the public-page fallback above.
+Replace the example links with 1–10 distinct, confirmed ATS **board** URLs (not job details or endpoints). Use each URL as a literal `--board` value without tracking query or fragment. Submit exactly one Bash command per batch, with the plugin path already substituted by Claude Code. Do not introduce shell variables, assignments, loops, pipelines, redirects, or wrappers. The command itself handles batching and emits a compact JSON result for each input.
+
+Supported boards: Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and Workday (exact public host, including its wdN shard, and career-site path). Use each `ok` result as discovery evidence only; it does not verify a vacancy. Treat `blocked` and `unavailable` results as source limitations, not empty inventories. Skip `duplicate` entries and use the public-page fallback for unsupported boards. If the direct command needs approval and is denied, record the limitation and continue with accessible public pages; do not retry with a different shell script.
 
 ## Build the evidence session
 
