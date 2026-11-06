@@ -145,3 +145,4 @@ vite.config.ts.timestamp-*
 # User-generated job reports
 output/
 .nz-job-scout-state.json
+.nz-job-scout-session-*.json
