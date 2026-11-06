@@ -3,18 +3,15 @@ name: nz-job-scout
 description: Read a local PDF or Markdown resume, find recent publicly accessible New Zealand jobs that genuinely fit it, and save a clear report with a direct application route.
 allowed-tools:
   - Read
-  - Edit(.nz-job-scout-session-*.json)
-  - Edit(.nz-job-scout-state.json)
+  - Edit(/.nz-job-scout-session-*.json)
+  - Edit(/.nz-job-scout-state.json)
   - WebSearch
   - WebFetch
   - Bash(shasum -a 256 *)
-  - Bash(nz-job-scout inventory *)
-  - Bash(nz-job-scout validate *)
-  - Bash(nz-job-scout report *)
-  - Bash(node *nz-job-scout inventory *)
-  - Bash(node *nz-job-scout validate *)
-  - Bash(node *nz-job-scout report *)
-  - Bash(rm .nz-job-scout-session-*)
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory --provider *)'
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input *)'
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input *)'
+  - Bash(rm -- .nz-job-scout-session-*.json)
 ---
 
 # NZ Job Scout
@@ -27,13 +24,15 @@ The skill exists for one closed loop: **resume → suitable current jobs → an 
 
 Accept a PDF or Markdown resume, optional natural-language criteria, or both. A resume-only request uses the role families and locations that are clearly supported by the resume. Explicit criteria narrow or extend that scope. Default to vacancies posted within the last 7 days, unless the user explicitly requests another window.
 
-Do not invent location, availability, work-right, technology, or employment-type restrictions. Ask one short question only if the missing fact would materially change which roles are eligible.
+Use the criteria already supplied in the request and the work rights stated in the CV. Do not reconfirm supplied information or the default posting window. Leave unsupported facts unknown and continue with verifiable matches. Ask one short question only when a missing fact prevents a useful scan.
 
 Read [references/session-format.md](references/session-format.md) before producing the evidence session. Read [references/state-file.md](references/state-file.md) only if a state file exists or the user provides a role decision.
 
 ## Public-source boundary
 
 Use only anonymously accessible information. Never request, inspect, import, export, or retain cookies, passwords, tokens, browser storage, private profiles, logged-in sessions, paid extensions, or employer-only partner credentials.
+
+Use `WebSearch` to find leads and `WebFetch` to read the public employer careers page, vacancy, or linked ATS page. The bundled `inventory` command below is the only shell-based discovery route: use it only when a public link identifies a supported ATS and its employer account. Keep each approved command separate in the project directory. Do not improvise `curl`, `wget`, inline Node/Python, shell loops, pipelines, or guessed API paths to discover vacancies or recover missing page data.
 
 Prefer primary sources:
 
@@ -43,7 +42,7 @@ Prefer primary sources:
 
 Use general search, SEEK, LinkedIn, Trade Me Jobs, aggregators, and indexed snippets only for discovery when publicly visible. A discovery result is not verification. Replace it with the exact public employer or ATS vacancy page before recommending it.
 
-On a login wall, CAPTCHA, 401, 403, robots restriction, or access denial, stop using that source for the run. Look for a public primary copy and record the limitation. Do not evade, retry repeatedly, or interpret access failure as evidence that a role is closed.
+If neither the public careers pages nor an identified supported ATS lets you inspect the employer's vacancies, make at most one follow-up `WebSearch` for the employer's public vacancies in the target location. Follow a verified public link if one is found. Otherwise record the source as blocked, unavailable, or discovery-only as appropriate, retain any unresolved lead, and continue with other sources. Access failure does not mean the vacancy is closed.
 
 ## Recommendation gate
 
@@ -75,7 +74,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.2"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.3"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -119,7 +118,7 @@ Do not describe a run as complete merely because each family has one generic `se
 
 ### Structured public evidence
 
-When the visible page is sparse, inspect public page data without bypassing access controls. Prefer, in order:
+Use the following evidence when the public page tools or bundled adapter expose it. Prefer, in order:
 
 1. visible employer or ATS job content;
 2. public `JobPosting` JSON-LD embedded in that exact page;
@@ -129,17 +128,17 @@ When the visible page is sparse, inspect public page data without bypassing acce
 
 Structured data may support title, organisation, location, posting date, closing date, employment terms, and application URL. Record its source URL and `sourceType`; do not silently merge conflicting dates.
 
-For supported ATS inventories, prefer the bundled public adapter over free-form page interpretation:
+For an identified supported ATS, use the bundled public adapter. Run it directly through Node using the plugin root; no global CLI lookup, shell wrapper, or change of directory is needed:
 
 ```bash
-nz-job-scout inventory --provider PROVIDER --account ACCOUNT [--host WORKDAY_HOST] [--site SITE] [--tenant TENANT] [--query QUERY]
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory --provider PROVIDER --account ACCOUNT
 ```
 
-Supported providers are Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday career sites. Workday requires the exact hostname visible in the public careers URL, including its `wdN` shard; never guess it. The adapter uses anonymous public endpoints, performs no retries or bypasses, and returns canonical inventory links as JSON. A 401, 403, 429, CAPTCHA, or invalid endpoint is a restricted source, not evidence that no vacancy exists. Use ordinary public-page research when the ATS cannot be identified or the endpoint is not public.
+Supported providers are Workable, Greenhouse, Lever, SmartRecruiters, Ashby, BambooHR, and accessible Workday career sites. Derive the account and any needed `--host`, `--site`, or `--tenant` values from the public careers link; Workday requires the exact hostname, including its `wdN` shard. Add `--query` only to narrow an identified inventory. The adapter uses anonymous public endpoints, performs no retries or bypasses, and returns canonical inventory links as JSON. If the adapter is unsupported or returns an error, use the public-page fallback above.
 
 ## Build the evidence session
 
-Create `.nz-job-scout-session-<timestamp>.json` in the user's current project directory. Do not place it in the plugin installation or store credentials, raw browser state, or unnecessary CV contents.
+Use Claude Code's file-writing tool to create `.nz-job-scout-session-<timestamp>.json` in the user's current project directory. Do not use a shell heredoc or script to write it. Do not place it in the plugin installation or store credentials, raw browser state, or unnecessary CV contents.
 
 For each assessed vacancy record:
 
@@ -169,14 +168,7 @@ Treat events, talent pools, candidate programmes, and recruitment channels as `r
 
 The minimal workflow and recommendation gate take priority over the implementation-level audit details above. Keep research bounded: use a few broad discovery searches, then verify primary employer or ATS pages for plausible matches. Do not keep searching merely to increase funnel counts, and do not expose the audit trail, rejected roles, events, talent pools, or raw queries in the final report. The only user-facing question is: **what can this person apply for now, and how?**
 
-Quote paths and run:
-
-```bash
-nz-job-scout validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
-nz-job-scout report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
-```
-
-If the installed command is unavailable:
+Quote paths and run these two bundled commands separately:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
@@ -191,7 +183,7 @@ The user-facing report is deliberately short. It contains only **Ready to apply*
 
 If today's report already exists, the runtime appends only new or materially changed items when the resume fingerprint and criteria context are identical. Across recent reports with the same context, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`. A different resume or criteria set creates a separate context-suffixed report rather than mixing evidence into the existing file.
 
-After a successful report, remove the exact temporary session filename unless the user asks to keep it. Never use a wildcard in the cleanup command.
+After a successful report, run `rm -- .nz-job-scout-session-TIMESTAMP.json` with the exact filename created in this run unless the user asks to keep it. Never use a wildcard in the cleanup command. If cleanup needs additional approval, leave the temporary file and report its path.
 
 ## Return the result
 
