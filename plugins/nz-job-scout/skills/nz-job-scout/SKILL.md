@@ -9,9 +9,23 @@ allowed-tools:
   - WebFetch
   - Bash(shasum -a 256 *)
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board *)'
-  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input *)'
   - Bash(rm -- .nz-job-scout-session-*.json)
+disallowed-tools:
+  - Grep
+  - Bash(grep *)
+  - Bash(rg *)
+  - Bash(sed *)
+  - Bash(awk *)
+  - Bash(cat *)
+  - Bash(head *)
+  - Bash(tail *)
+  - Bash(jq *)
+  - Bash(python *)
+  - Bash(python3 *)
+  - Bash(node -e *)
+  - Bash(curl *)
+  - Bash(wget *)
 ---
 
 # NZ Job Scout
@@ -27,6 +41,10 @@ Accept a PDF or Markdown resume, optional natural-language criteria, or both. A 
 Use the criteria already supplied in the request and the work rights stated in the CV. Do not reconfirm supplied information or the default posting window. Leave unsupported facts unknown and continue with verifiable matches. Ask one short question only when a missing fact prevents a useful scan.
 
 Read [references/session-format.md](references/session-format.md) before producing the evidence session. Read [references/state-file.md](references/state-file.md) only if a state file exists or the user provides a role decision.
+
+**Do not inspect old reports during a scan.** Use the current resume, request, and project decision state. Do not list or open prior `output/nz-jobs-*.md` files, extract their context markers, or compare their dates or role families. The bundled `report` command reads report history and deduplicates automatically at the end. For a separate request to review a specific old report, use `Read` on that file directly; do not run a scan or a shell command just to review it.
+
+**Use only the Bash commands declared in `allowed-tools` above, one per tool call, with literal arguments.** No helper commands for file discovery, history checks, or output parsing; no assignments, loops, pipes, redirects, or chained commands. If a permitted command cannot run, state the limitation instead of replacing it with a shell script.
 
 ## Public-source boundary
 
@@ -74,7 +92,7 @@ In `criteria` mode, create the neutral candidate object defined in the reference
 
 ## Search planning and discovery
 
-Start every evidence session with `pluginVersion: "0.8.5"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
+Start every evidence session with `pluginVersion: "0.8.6"` and `sessionSchemaVersion: 6`. Set `preferences.maxPostingAgeDays` to `7` unless the user explicitly requests another window. If validation reports another version, stop and tell the user that Claude Code is running a stale installed plugin; do not silently fall back to an older schema.
 
 Before discovery, read `.nz-job-scout-state.json` from the current project when present. Do not search for or report matching applied, rejected, not-interested, or closed roles. Update this file only after an explicit user decision; never infer rejection from silence or lack of progress.
 
@@ -89,7 +107,7 @@ For every intended family, complete both discovery routes:
 1. `broad-discovery`: use a deliberately broad role/stage/location query. Avoid adding a specific technology unless the user made it mandatory. For example, prefer `software testing intern Auckland` over a narrow stack phrase such as `Java API test automation internship Auckland`.
 2. `source-inventory`: inspect a public collection of vacancies, such as a location/category result page, an employer careers listing, an ATS board/feed, or a public sitemap. Capture every plausibly relevant lead visible in the inspected collection before filtering it by CV fit.
 
-Use `focused-follow-up` only to close a demonstrated gap; it is not a requirement to enumerate every possible job title. Deduplicate after discovery, not by narrowing discovery queries.
+Use `focused-follow-up` only to close a demonstrated gap; it is not a requirement to enumerate every possible job title. Merge duplicate leads within the current scan after discovery, not by narrowing discovery queries. Leave cross-report deduplication to `report`.
 
 Whenever a lead reveals an employer operating in an intended responsibility family, decide whether the employer inventory needs expansion. Set `employerExpansionRequired: true` when the employer was discovered through a board, search result, inaccessible detail page, closed role, senior role, permanent role, or another listing that does not establish that the employer's current vacancy inventory was inspected. Then perform one `employer-expansion` attempt covering that employer's public careers/ATS inventory or a broad employer-and-location vacancy search. A specific role being unsuitable is not a reason to skip the employer expansion. Set the flag to `false` only when the lead itself came from an already-inspected employer/ATS inventory or the employer is demonstrably outside the requested responsibility families, and record the reason.
 
@@ -172,10 +190,9 @@ Treat events, talent pools, candidate programmes, and recruitment channels as `r
 
 The minimal workflow and recommendation gate take priority over the implementation-level audit details above. Keep research bounded: use a few broad discovery searches, then verify primary employer or ATS pages for plausible matches. Do not keep searching merely to increase funnel counts, and do not expose the audit trail, rejected roles, events, talent pools, or raw queries in the final report. The only user-facing question is: **what can this person apply for now, and how?**
 
-Quote paths and run these two bundled commands separately:
+Quote paths and run the bundled report command once. It validates the evidence before processing history or writing the report; do not run a separate validation command for a normal scan:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" validate --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input "/absolute/path/to/.nz-job-scout-session-TIMESTAMP.json"
 ```
 
@@ -185,7 +202,7 @@ The runtime is authoritative for validation, posting age, application-route comp
 
 The user-facing report is deliberately short. It contains only **Ready to apply**, **Worth considering**, and concise **Scan notes**. Do not fill it with stale jobs, closed roles, activities, talent pools, raw search queries, or lengthy rejection tables.
 
-If today's report already exists, the runtime appends only new or materially changed items when the resume fingerprint and criteria context are identical. Across recent reports with the same context, unchanged roles and related opportunities are suppressed; a new verification timestamp alone is not a change. A changed closing date, availability state, application route, requirement, or verification outcome must reappear as `Updated evidence`. A different resume or criteria set creates a separate context-suffixed report rather than mixing evidence into the existing file.
+Use the path, write outcome, and history summary printed by `report`. If needed to summarise the result, use `Read` only on that returned path; no additional report or source-code lookup is needed. If the command says the existing report was left unchanged, do not present its old entries as new results.
 
 After a successful report, run `rm -- .nz-job-scout-session-TIMESTAMP.json` with the exact filename created in this run unless the user asks to keep it. Never use a wildcard in the cleanup command. If cleanup needs additional approval, leave the temporary file and report its path.
 

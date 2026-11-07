@@ -10,7 +10,7 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PLUGIN_VERSION = '0.8.5';
+export const PLUGIN_VERSION = '0.8.6';
 export const SESSION_SCHEMA_VERSION = 6;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
@@ -1245,11 +1245,11 @@ function applyProjectExclusions(session, state) {
     && !removedJobs.some((job) => leadMatchesJob(lead, job)));
   return { session: { ...session, jobs, leads }, excludedCount: removedJobs.length + (asArray(session.leads).length - leads.length) };
 }
-async function loadReportHistory(outputPath, now, maxPostingAgeDays, expectedContext) {
+async function loadReportHistory(outputPath, now, lookbackDays, expectedContext) {
   const target = resolve(outputPath);
   const folder = dirname(target);
   const today = aucklandDateKey(now);
-  const earliest = shiftDateKey(today, -Math.max(1, Number(maxPostingAgeDays ?? 7)));
+  const earliest = shiftDateKey(today, -lookbackDays);
   let names = [];
   try { names = await readdir(folder); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }
@@ -1324,11 +1324,13 @@ export async function writeReport(inputPath, outputPath, options = {}) {
   const activeSession = exclusions.session;
   const now = options.now ? new Date(options.now) : new Date();
   const scanContext = deriveScanContext(activeSession);
+  const lookbackDays = Math.max(1, Number(activeSession.preferences.maxPostingAgeDays ?? 7));
   let target = resolve(outputPath);
-  let history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays, scanContext);
-  if (history.targetContextMismatch) {
+  let history = await loadReportHistory(target, now, lookbackDays, scanContext);
+  const separateContext = history.targetContextMismatch;
+  if (separateContext) {
     target = target.replace(/\.md$/i, `-${scanContext.scanContextFingerprint.slice(0, 8)}.md`);
-    history = await loadReportHistory(target, now, activeSession.preferences.maxPostingAgeDays, scanContext);
+    history = await loadReportHistory(target, now, lookbackDays, scanContext);
   }
   const jobs = filterHistoricalItems(activeSession.jobs, history, jobIdentityKeys, (job) => rawJobState(job, activeSession.preferences, now));
   // Events and talent pools are deliberately outside the concise job report.
@@ -1347,6 +1349,7 @@ export async function writeReport(inputPath, outputPath, options = {}) {
   report.excludedByProjectState = exclusions.excludedCount;
   report.newListingsCount = jobs.fresh.length;
   report.outputPath = target;
+  report.historySummary = { lookbackDays, separateContext };
   await mkdir(dirname(target), { recursive: true });
   const newItems = jobs.fresh.length + opportunities.fresh.length;
   if (history.currentMarkdown !== undefined) {
@@ -1379,8 +1382,8 @@ export async function runCli(argv = process.argv.slice(2)) {
     const args = parseArgs(argv);
     if (args.help || !args.command) { console.log(usage()); return 0; }
     if (!args.input) throw new Error('--input is required');
-    const session = await readSession(args.input);
     if (args.command === 'validate') {
+      const session = await readSession(args.input);
       const result = validateSession(session);
       if (!result.valid) throw new Error(result.errors.join('\n'));
       const coverage = deriveSearchCoverage(session.searchCoverage, session.leads);
@@ -1390,11 +1393,13 @@ export async function runCli(argv = process.argv.slice(2)) {
     if (args.command === 'report') {
       const output = resolveReportOutput(args.output, { allowCustomOutput: args.allowCustomOutput === true });
       const report = await writeReport(args.input, output);
-      if (report.writeAction === 'unchanged') console.log(`No new or changed items; existing report left unchanged: ${report.outputPath} (${report.excludedPreviouslyReported} unchanged item(s))`);
+      if (report.writeAction === 'unchanged') console.log(`No new or changed items; existing report left unchanged: ${report.outputPath}`);
       else {
         const action = report.writeAction === 'appended' ? 'updated incrementally' : 'created';
         console.log(`Report ${action}: ${report.outputPath} (${report.recommended.length} recommendation(s), ${report.stretch.length} consider, ${report.manualVerification.length + report.unresolvedHighValueLeads.length} manual-verification lead(s), ${report.updatedListingsCount} updated)`);
       }
+      const { lookbackDays, separateContext } = report.historySummary;
+      console.log(`Report history: same resume and criteria only, ${lookbackDays}-day lookback; skipped ${report.excludedPreviouslyReported} unchanged item(s).${separateContext ? ' Today’s default report belongs to a different context; using a separate report.' : ''}`);
       return 0;
     }
     throw new Error(`Unknown command: ${args.command}`);

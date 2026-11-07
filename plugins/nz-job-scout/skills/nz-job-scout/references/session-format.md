@@ -16,7 +16,7 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ```json
 {
-  "pluginVersion": "0.8.5",
+  "pluginVersion": "0.8.6",
   "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
@@ -539,5 +539,5 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 - Never record credentials, cookies, tokens, private browser state, or unrelated personal data.
 - Generated reports contain hidden non-sensitive identity/state and scan-context markers. The runtime deduplicates only within the same resume/criteria context, suppresses unchanged roles, and re-reports materially changed evidence as `Updated evidence`.
-- Do not delete or edit those markers manually when incremental reporting is desired.
+- Do not extract, delete, or edit those markers during a scan. The `report` command reads them without a separate file or shell step.
 - User decisions belong in the ignored project-local `.nz-job-scout-state.json`; see [state-file.md](state-file.md). Verification timestamps alone do not make an unchanged opportunity new.

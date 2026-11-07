@@ -49,4 +49,4 @@ Only use `complete` when every planned required target is `searched`, every expl
 
 ## Watchlists and history
 
-Treat a user-supplied employer watchlist as a source-plan input, not as proof that an employer has an opening. Check its public vacancy inventory once per scan and record the attempt, including zero-result checks. Use the report's hidden identity/state markers for daily deduplication; do not delete them. A changed application route, deadline, eligibility, employment form, or verification outcome should reappear as updated evidence.
+Treat a user-supplied employer watchlist as a source-plan input, not as proof that an employer has an opening. Check its public vacancy inventory once per scan and record the attempt, including zero-result checks. The bundled `report` command reads its own history markers; do not inspect prior reports or extract their markers during a scan. A changed application route, deadline, eligibility, employment form, or verification outcome should reappear as updated evidence.
