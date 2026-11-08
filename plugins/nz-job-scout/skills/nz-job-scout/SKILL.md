@@ -11,6 +11,7 @@ allowed-tools:
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock --since *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board *)'
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" prepare --input *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input *)'
   - Bash(rm -- .nz-job-scout-session-*.json)
 disallowed-tools:
@@ -44,9 +45,9 @@ Start the clock before reading the CV:
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock
 ```
 
-Expect `pluginVersion: "0.8.7"`; evidence uses `sessionSchemaVersion: 6`. A stale version or broken runtime is a limitation to report, not permission to repair, build, install, copy into a cache, or edit source code. Do not inspect source/tests during a scan.
+Expect `pluginVersion: "0.8.8"`; evidence uses `sessionSchemaVersion: 7`. Schema 6 is no longer accepted. A stale version or broken runtime is a limitation to report, not permission to repair, build, install, copy into a cache, or edit source code. Do not inspect source/tests during a scan.
 
-Keep the returned `startedAt`. After input preparation, before another batch of optional research, and immediately before creating the session, check the same start time:
+Keep the returned `startedAt`. After input preparation, before another batch of optional research, and immediately before reporting, check the same start time:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock --since 'START_TIMESTAMP_FROM_CLOCK'
@@ -66,9 +67,15 @@ Use supplied facts without reconfirming them. Read `.nz-job-scout-state.json` wh
 
 Read [references/session-format.md](references/session-format.md) for evidence fields. Keep languages/tools, sustained capabilities, qualifications, availability and work rights separate. Match recurring responsibilities, not keyword counts. A certification alone is exposure, **not working experience or invented years**; record it in qualifications or use `evidenceKind: "certification"`, `level: "exposure"`, no hands-on years.
 
-Record user-confirmed availability windows with hours and, when known, `workload: "full-time"` or `"part-time"`. If the user explicitly permits full-time work only inside those windows, add the hard `fullTimeScope: availability-windows-only` constraint described in the reference. Do not infer it merely from student status or a temporary visa. Keep personal visa conditions unknown unless evidenced.
+Before research, record mandatory `preferences.schedule` from this invocation's request, supplied CV and established conversation facts: full-time `window-limited`, `ongoing`, `excluded`, or `unknown`, evidence source, and a short faithful quote/paraphrase in `basis`. Preserve explicit weekly-hour or maximum-duration limits. Do not invent numerical limits, convert class-free days into unrestricted availability, or infer work rights from student status. Record exact availability windows only when known; otherwise retain the stated restriction and mark unresolved dates unknown.
 
-Save `execution.inputsReadyAt` from a clock checkpoint after preparation.
+Save a minimal `.nz-job-scout-session-TIMESTAMP.json` in the project now, including candidate, resume fingerprint, preferences and `execution.inputsReadyAt` from a clock checkpoint. Then fix this run's input scope before discovery:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" prepare --input '/absolute/project/.nz-job-scout-session-TIMESTAMP.json'
+```
+
+Check its printed schedule against the supplied facts yourself; do not ask the user to reconfirm already-provided facts. Append research to the same session without weakening or deleting prepared conditions. A changed request needs a fresh run. The ignored per-run `output/.audit/` record is a debugging trace, not a reusable candidate profile.
 
 ## Discover broadly, deepen selectively
 
@@ -100,15 +107,17 @@ Check these in order:
 
 Known hard conflicts are **not unknowns**. When full-time work is explicitly window-limited, permanent full-time is incompatible even without an end date. Record a stated duration as `duration: {"value": 9, "unit": "months"}` rather than losing it because exact dates are absent. The runtime rejects durations longer than all confirmed full-time windows. Do not confuse short summer full-time work with ongoing full-time work. Missing dates/hours without a demonstrated conflict stay unknown; never invent dates or assume the role becomes part-time because the candidate has class-free days.
 
-Do not fill complete `jobs[]` records for clearly rejected discoveries. A lightweight discarded lead needs only title, employer, URL, outcome and reason; add whether its detail page was actually opened. Keep richer evidence for assessed or genuinely high-value unresolved leads. Record one attempt per actual operation. Never retrospectively set every lead's `detailPageOpened` to true. The runtime can derive that count for assessed leads from matching observed vacancy evidence.
+Do not fill complete `jobs[]` records for clearly rejected discoveries. A lightweight discarded lead needs only title, employer, URL, outcome and reason; add whether its detail page was actually opened. Assessed leads are derived from `jobs[]`; do not write them twice. Use the compact `observation` field instead of repeating verification/source flags. Record one attempt per actual operation. Never retrospectively mark discoveries opened. Do not copy the large example session as a scaffold.
 
 ## Verify and report
 
-Ready to apply / Worth considering both require an opened exact public employer/ATS vacancy, a verified posting date inside the window, no known closure, no known hard conflict, genuine duty overlap, and either a direct online link or a plain email address **with employer instructions**. A `mailto:` alone is insufficient. Work-right/scheduling unknowns never erase known incompatibility. A missing closing date alone is not a rejection; a contradictory primary deadline is different: set `verificationEvidence.unresolvedDateConflict: true` with notes and leave it unverified until reconciled.
+Ready to apply / Worth considering both require an opened exact public employer/ATS vacancy, a verified posting date inside the window, no known closure, no known hard conflict, genuine duty overlap, established essential schedule inputs, and either a direct online link or a plain email address **with employer instructions**. A `mailto:` alone is insufficient. Unknown schedule scope or unbounded full-time duration is not an actionable match. Work-right unknowns never erase known incompatibility. A missing closing date alone is not a rejection; a contradictory primary deadline is different: set `verificationEvidence.unresolvedDateConflict: true` with notes and leave it unverified until reconciled.
+
+Resolve discovery short links through permitted public tools to the observed canonical URL. Confirm the exact employer AND title on that page; similarly named organisations are not interchangeable. Never attach a copied short link to a different role or guess an employer domain. `report` independently re-reads at most ten plausible candidates (two concurrently), checks employer/title and application identity with bounded anonymous requests, and ignores model-supplied identity results. An unreadable/restricted/mismatched page cannot enter either actionable list. Do not retry a runtime access failure through another scraping method.
 
 Preserve stronger primary evidence and each observed date's provenance. Separate hard eligibility from preferences, and `any` from `all` technology groups. Events, talent pools and conditional programmes are not jobs. Technical volunteers need explicit software/test/automation/support duties and paid/unpaid/reimbursed/unknown compensation; never disguise them as employment.
 
-After the final clock checkpoint, write one `.nz-job-scout-session-TIMESTAMP.json` in the project using the file-writing tool, then run:
+After the final clock checkpoint, append the compact research evidence and `researchFinishedAt` to the prepared session using the file-writing tool, then run:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input '/absolute/project/.nz-job-scout-session-TIMESTAMP.json'
@@ -116,6 +125,6 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input '/absolute/project/
 
 It validates, deduplicates and writes `./output/nz-jobs-YYYY-MM-DD.md`. Do not override the location unless explicitly requested. Correct session evidence if validation fails; never bypass validation, hand-edit conclusions, or repair plugin code. If reporting fails after correcting an identifiable session error, stop and disclose the failure separately from search results.
 
-Return the absolute report path and only actionable roles with direct links/email instructions. Read that returned path if needed. Do not expose raw logs or rejection tables. Keep partial/blocked coverage explicit; never infer market-wide absence. If history leaves the report unchanged, do not present old entries as new. Report timing only from clock checkpoints: research includes discovery and verification, not a guessed breakdown of interleaved work.
+Return the `USER SUMMARY` printed by the command. It is rendered from the same decision objects as the Markdown; do not improvise extra roles, links, deadlines, eligibility statements or market-wide conclusions. Identity-checked but incomplete entries appear as “Needs checking”, not recommendations, in both outputs. Raw blocked leads remain in the audit only. If history leaves the report unchanged, do not present old entries as new. Timing comes only from observed checkpoints.
 
-After success, remove only this run's exact temporary session with the permitted cleanup command, unless asked to retain it. No wildcard cleanup. Applying, uploading a CV, sending messages and creating accounts require explicit approval. A scan must not modify plugin code, dependencies, permissions, installed versions or caches.
+After success, remove only this run's exact temporary session with the permitted cleanup command, unless asked to retain it. Keep the compact `output/.audit/` trace so discarded roles and original conditions remain diagnosable; it excludes CV text and contact details. No wildcard cleanup. Applying, uploading a CV, sending messages and creating accounts require explicit approval. A scan must not modify plugin code, dependencies, permissions, installed versions or caches.

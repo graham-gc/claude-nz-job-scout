@@ -1,556 +1,140 @@
-# Evidence session format
+# Evidence session — schema 7
 
-Create one JSON session after resolving inputs and researching public sources. The runtime treats it as evidence. Never invent dates, employment terms, eligibility, application availability, or proficiency.
+Write compact facts, not a generated report. Never invent dates, work rights, application instructions or proficiency. Runtime fills mechanical defaults; do not copy the large example session.
 
-## Modes and precedence
+## Prepare before discovery
 
-- `profile`: candidate evidence, no explicit job criteria.
-- `criteria`: explicit criteria, no candidate evidence.
-- `combined`: both; explicit user criteria define eligibility and candidate evidence ranks matching roles.
-
-In criteria mode, use `name: "Not supplied"`, requested role families only, empty `skills`, `capabilities`, `availabilityWindows`, and `qualifications`, and omit `workRights` unless explicitly stated. Do not imply CV-based fit.
-
-`preferences.constraints[]` records where a restriction came from. Only `hard` mismatches block a role. Use `soft` for defaults or genuine preferences that should affect ranking without excluding a vacancy.
-
-## Complete example
-
-Optional fields added in 0.8.7 (schema 6 remains compatible):
-
-- `execution`: copy real `clock` outputs into `startedAt`, `inputsReadyAt`, and `researchFinishedAt`; optional `stopReason` is `finished`, `budget`, or `blocked`. All timestamps need timezones and chronological order. Omit unobserved checkpoints, never estimate them. The report measures preparation, combined discovery/verification research, and session/report finalisation; it does not claim timings for unmeasured substeps.
-- `searchCoverage.attempts[].roleFamilies`: an optional non-empty array instead of legacy `roleFamily`. Use it when one real inventory/search operation covers several intended families; it counts once, not as multiple fabricated operations.
-- `candidate.availabilityWindows[].workload`: `full-time` or `part-time` when explicitly known, alongside actual weekly-hour limits. Do not infer visa permission from the schedule.
-- `preferences.constraints[]`: when the user explicitly limits full-time work to the recorded windows, use `{ "field": "fullTimeScope", "value": "availability-windows-only", "strength": "hard", "source": "user-explicit" }` (or `conversation-context` for a previously stated restriction). It rejects permanent full-time and proven overlong full-time commitments without requiring exact job dates. Do not apply it to every student or temporary visa holder.
-- `jobs[].duration`: preserve a stated period such as `{ "value": 9, "unit": "months" }`; units are `days`, `weeks`, `months`. It is not a substitute for dates. With a window-limited full-time constraint, duration can prove a conflict; duration fitting a window never proves that the unspecified start/end dates fit.
-- `candidate.skills[]` / `capabilities[]`: optional `evidenceKind` is `hands-on`, `certification`, `coursework`, or `unknown`. Certification-only evidence must have `level: "exposure"` and zero/omitted `years`; do not convert a certificate into practical experience. Actual hands-on work and the credential can be recorded separately.
-- `jobs[].verificationEvidence.unresolvedDateConflict`: optional boolean for a contradictory primary deadline that cannot be reconciled; explain the conflict in `verificationEvidence.notes`. This blocks verification. An absent closing date alone is not a conflict.
-- Discarded leads (`out-of-scope`, `duplicate`, `previously-reported`) may be lightweight: `{ "title": "Example", "employer": "Example", "url": "https://careers.example.nz/job/1", "status": "out-of-scope", "reason": "Known workload conflicts with the request", "detailPageOpened": false }`. Keep employer-expansion flags and reasons when a relevant uninspected employer needs expansion; deferred expansion keeps coverage partial. Assessed or unresolved high-value leads still use the richer record below.
-
-For `assessed` leads, omitted `detailPageOpened` can be derived from the matching vacancy's observed primary evidence. Do not guess it for other leads or retroactively mark all discoveries opened. Unfinished planned sources/expansions may be `skipped` with a budget reason; validation does not require performing every planned operation before reporting partial results.
+Minimal initial shape (illustrative facts only):
 
 ```json
 {
-  "pluginVersion": "0.8.7",
-  "sessionSchemaVersion": 6,
-  "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  "candidate": {
-    "name": "Example Candidate",
-    "targetRoleFamilies": ["Software Test Engineer", "Java Backend Developer"],
-    "locations": ["Auckland"],
-    "workArrangements": ["on-site", "hybrid", "remote"],
-    "availabilityWindows": [
-      {
-        "startAt": "2026-11-01",
-        "endAt": "2027-02-28",
-        "maxHoursPerWeek": 40,
-        "note": "Scheduled summer break"
-      },
-      {
-        "startAt": "2026-07-01",
-        "endAt": "2026-10-31",
-        "maxHoursPerWeek": 25,
-        "note": "Teaching period"
-      }
-    ],
-    "workRights": {
-      "country": "New Zealand",
-      "status": "temporary",
-      "unrestricted": false,
-      "evidenceSource": "user-explicit",
-      "validUntil": "2027-12-31",
-      "visaType": "Student Visa",
-      "notes": ["Work conditions vary between teaching periods and scheduled breaks"]
+  "pluginVersion":"0.8.8",
+  "sessionSchemaVersion":7,
+  "resumeFingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "candidate":{
+    "name":"Example Candidate",
+    "targetRoleFamilies":["backend engineering","API test automation"],
+    "locations":["Auckland"],
+    "skills":[{"name":"Java","level":"core","evidenceKind":"hands-on"}],
+    "capabilities":[{"name":"API test automation","level":"core"}]
+  },
+  "preferences":{
+    "mode":"combined",
+    "maxPostingAgeDays":7,
+    "schedule":{
+      "fullTime":"window-limited",
+      "source":"user-explicit",
+      "basis":"Summer-only full-time or part-time up to 25 hours/week",
+      "partTimeMaxHours":25
     },
-    "domains": ["API test automation", "developer productivity"],
-    "skills": [
-      {
-        "name": "Java",
-        "level": "core",
-        "years": 8,
-        "lastUsedYear": 2026,
-        "evidence": ["Backend and test-platform development"]
-      }
-    ],
-    "capabilities": [
-      {
-        "name": "API test automation",
-        "level": "core",
-        "years": 4,
-        "lastUsedYear": 2026,
-        "evidence": ["Designed and delivered an API automation platform"]
-      }
-    ],
-    "qualifications": ["Bachelor of Engineering", "Master of Information Technology in progress"]
-  },
-  "preferences": {
-    "mode": "combined",
-    "keywords": [],
-    "maxPostingAgeDays": 7,
-    "includeUnverified": true,
-    "constraints": [
-      {
-        "field": "programmeType",
-        "value": "internship",
-        "strength": "hard",
-        "source": "user-explicit"
-      },
-      {
-        "field": "location",
-        "value": "Auckland",
-        "strength": "hard",
-        "source": "user-explicit"
-      },
-      {
-        "field": "workArrangement",
-        "value": "hybrid",
-        "strength": "soft",
-        "source": "resume-inferred"
-      },
-      {
-        "field": "excludeCoreSkill",
-        "value": "C#/.NET",
-        "strength": "hard",
-        "source": "user-explicit"
-      }
-    ],
-    "includeTechnicalVolunteer": false
-  },
-  "searchCoverage": {
-    "searchFamilies": ["software test engineering", "Java backend", "software support"],
-    "explicitSearchFamilies": ["software support"],
-    "programmeFirstRequired": true,
-    "sourceTargets": [
-      {
-        "name": "Web search discovery",
-        "channel": "web-search",
-        "purpose": "board-discovery",
-        "status": "searched",
-        "url": "https://www.google.com/search?q=software+intern+auckland",
-        "inventoryScope": "search-results",
-        "itemUrls": ["https://jobs.example.nz/job/example-engineering-nz-101"],
-        "itemsInspected": 1,
-        "requiredForCoverage": true,
-        "note": "Public result pages and indexed leads inspected"
-      },
-      {
-        "name": "SEEK discovery",
-        "channel": "seek",
-        "purpose": "board-discovery",
-        "status": "blocked",
-        "url": "https://nz.seek.com/jobs-in-auckland",
-        "inventoryScope": "search-results",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true,
-        "note": "Anonymous access was restricted"
-      },
-      {
-        "name": "LinkedIn Jobs discovery",
-        "channel": "linkedin",
-        "purpose": "board-discovery",
-        "status": "blocked",
-        "url": "https://www.linkedin.com/jobs/search/?location=Auckland%2C%20New%20Zealand",
-        "inventoryScope": "search-results",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true,
-        "note": "Anonymous access was restricted"
-      },
-      {
-        "name": "Trade Me Jobs discovery",
-        "channel": "trade-me",
-        "purpose": "board-discovery",
-        "status": "searched",
-        "url": "https://www.trademe.co.nz/a/jobs/search?search_string=software",
-        "inventoryScope": "search-results",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true
-      },
-      {
-        "name": "Auckland student programme inventory",
-        "channel": "programme",
-        "purpose": "programme-inventory",
-        "status": "searched",
-        "url": "https://careers.example.nz/students",
-        "inventoryScope": "listing-page",
-        "itemUrls": ["https://careers.example.nz/students/software-test-engineer-intern"],
-        "itemsInspected": 1,
-        "requiredForCoverage": true,
-        "note": "Broad student and early-career inventory inspected before duty filtering"
-      },
-      {
-        "name": "Example Engineering public ATS inventory",
-        "channel": "public-ats",
-        "purpose": "employer-ats",
-        "employer": "Example Engineering",
-        "status": "searched",
-        "url": "https://careers.example.com/jobs",
-        "inventoryScope": "ats-board",
-        "itemUrls": ["https://careers.example.com/jobs/NZ-101"],
-        "itemsInspected": 1,
-        "requiredForCoverage": true,
-        "note": "Public employer and ATS vacancy inventories inspected"
-      },
-      {
-        "name": "Example Systems careers inventory",
-        "channel": "employer-careers",
-        "purpose": "employer-ats",
-        "employer": "Example Systems",
-        "status": "searched",
-        "url": "https://jobs.example-systems.com/openings",
-        "inventoryScope": "listing-page",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true
-      },
-      {
-        "name": "Example Digital public ATS inventory",
-        "channel": "public-ats",
-        "purpose": "employer-ats",
-        "employer": "Example Digital",
-        "status": "searched",
-        "url": "https://apply.example-digital.com/jobs",
-        "inventoryScope": "ats-board",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true
-      },
-      {
-        "name": "Example Cloud careers inventory",
-        "channel": "employer-careers",
-        "purpose": "employer-ats",
-        "employer": "Example Cloud",
-        "status": "searched",
-        "url": "https://careers.example-cloud.com/vacancies",
-        "inventoryScope": "listing-page",
-        "itemUrls": [],
-        "itemsInspected": 0,
-        "requiredForCoverage": true
-      }
-    ],
-    "attempts": [
-      {
-        "roleFamily": "student technology programmes",
-        "strategy": "programme-discovery",
-        "source": "Public programme inventories",
-        "query": "Auckland internship and student technology opportunities",
-        "status": "searched",
-        "leadsDiscovered": 2,
-        "detailPagesOpened": 1,
-        "requiredForCoverage": true,
-        "note": "Generic technical programme titles were retained for duty review"
-      },
-      {
-        "roleFamily": "software test engineering",
-        "strategy": "broad-discovery",
-        "source": "Web search",
-        "query": "software test internship Auckland",
-        "status": "searched",
-        "leadsDiscovered": 2,
-        "detailPagesOpened": 1,
-        "requiredForCoverage": true,
-        "note": "Broad discovery results inspected"
-      },
-      {
-        "roleFamily": "software test engineering",
-        "strategy": "source-inventory",
-        "source": "Employer careers",
-        "query": "Example Engineering current vacancies",
-        "status": "searched",
-        "leadsDiscovered": 1,
-        "detailPagesOpened": 1,
-        "requiredForCoverage": true,
-        "note": "Employer vacancy inventory inspected"
-      },
-      {
-        "roleFamily": "Java backend",
-        "strategy": "broad-discovery",
-        "source": "Web search",
-        "query": "backend intern Auckland",
-        "status": "searched",
-        "leadsDiscovered": 1,
-        "detailPagesOpened": 0,
-        "requiredForCoverage": true,
-        "note": "A public job-board lead was discovered"
-      },
-      {
-        "roleFamily": "Java backend",
-        "strategy": "source-inventory",
-        "source": "SEEK public pages",
-        "query": "Java backend internship Auckland",
-        "status": "discovery-only",
-        "leadsDiscovered": 1,
-        "detailPagesOpened": 0,
-        "requiredForCoverage": true,
-        "note": "Indexed result found; exact detail page was not anonymously accessible"
-      },
-      {
-        "roleFamily": "Java backend",
-        "strategy": "employer-expansion",
-        "employer": "Example Systems",
-        "source": "Employer careers",
-        "query": "Example Systems Auckland vacancies",
-        "status": "searched",
-        "leadsDiscovered": 0,
-        "detailPagesOpened": 0,
-        "requiredForCoverage": true,
-        "note": "The public employer inventory contained no additional current roles"
-      },
-      {
-        "roleFamily": "software support",
-        "strategy": "broad-discovery",
-        "source": "Web search",
-        "query": "technology services intern Auckland",
-        "status": "searched",
-        "leadsDiscovered": 0,
-        "detailPagesOpened": 0,
-        "requiredForCoverage": true
-      },
-      {
-        "roleFamily": "software support",
-        "strategy": "source-inventory",
-        "source": "Public ATS pages",
-        "query": "Auckland technology and digital services vacancies",
-        "status": "searched",
-        "leadsDiscovered": 0,
-        "detailPagesOpened": 0,
-        "requiredForCoverage": true
-      }
+    "constraints":[
+      {"field":"location","value":"Auckland","strength":"hard","source":"user-explicit"},
+      {"field":"engagementModel","value":"employee","strength":"hard","source":"user-explicit"}
     ]
-  },
-  "leads": [
-    {
-      "title": "Software Test Engineer Intern",
-      "employer": "Example Engineering",
-      "source": "Employer careers",
-      "url": "https://careers.example.com/jobs/NZ-101",
-      "roleFamily": "software test engineering",
-      "discoveredAt": "2026-09-01T09:00:00+12:00",
-      "detailPageOpened": true,
-      "status": "assessed",
-      "priority": "high",
-      "directSourceStatus": "found",
-      "employerExpansionRequired": false,
-      "employerExpansionReason": "The lead came from the employer careers inventory already inspected in this run"
-    },
-    {
-      "title": "Java Intern",
-      "employer": "Example Systems",
-      "source": "SEEK public search result",
-      "url": "https://www.seek.co.nz/job/12345678",
-      "roleFamily": "Java backend",
-      "discoveredAt": "2026-09-01T09:10:00+12:00",
-      "detailPageOpened": false,
-      "status": "not-opened",
-      "priority": "high",
-      "directSourceStatus": "not-found",
-      "employerExpansionRequired": true,
-      "employerExpansionReason": "The employer was discovered through a restricted job-board detail page and its vacancy inventory has not been inspected",
-      "reason": "Exact detail page was not anonymously accessible and no primary copy was found"
-    }
+  }
+}
+```
+
+Run prepare on this file before discovery. It freezes this run's resume hash, preferences, availability and work-right facts. Append research without weakening inputs. A changed request needs a fresh session filename. The ignored output/.audit trace is retained for debugging, not reused as a candidate profile.
+
+Modes: profile = CV only; criteria = criteria only; combined = both. Profile/combined require the actual CV SHA-256. Criteria mode omits the hash, uses name "Not supplied", and never invents skills or CV-based fit. Missing candidate arrays default to empty.
+
+Mandatory preferences.schedule:
+
+- fullTime: window-limited / ongoing / excluded / unknown.
+- source: user-explicit / conversation-context / resume / unknown.
+- basis: faithful short quote/paraphrase; required unless source unknown.
+- partTimeMaxHours: positive number only if supplied.
+- maxFullTimeDuration: optional {"value":12,"unit":"weeks"} only when the user supplied that maximum; days/weeks/months. Never turn a preference for short internships into a fabricated hard maximum.
+- No evidence: fullTime/source unknown, no numerical allowances. Unknown scope cannot become an actionable full-time recommendation.
+
+When known, candidate.availabilityWindows contain actual startAt, endAt, maxHoursPerWeek and workload full-time/part-time. Leave unknown dates absent and preserve the restriction in schedule. Class-free days and availability do not establish visa permission.
+
+Work rights only when evidenced: {"country":"New Zealand","status":"temporary","unrestricted":false,"evidenceSource":"user-explicit","visaType":"Student Visa"}. Status temporary/unrestricted/none/unknown; evidenceSource user-explicit/resume/official-document/unknown. Include validUntil only when known. No assumed future post-study visa.
+
+Skill/capability levels: core/frequent/working/exposure. Years and lastUsedYear only when evidenced. Certifications belong in qualifications or use evidenceKind certification + level exposure + no hands-on years. Preserve sustained capabilities separately from tool keywords.
+
+Constraints have field, value, strength hard/soft, source user-explicit/conversation-context/resume-inferred/skill-default. Fields include programmeType, contractType, workload, location, workArrangement, engagementModel, roleFamily, keyword, excludeCoreSkill. Use schedule for time limits; do not rely on optional legacy fullTimeScope.
+
+## Append research
+
+Append searchCoverage, jobs and leads. Missing jobs/leads/relatedOpportunities default to empty. Assessed leads are derived from jobs: never write them twice.
+
+### Coverage
+
+```json
+{
+  "searchFamilies":["backend engineering","API test automation"],
+  "explicitSearchFamilies":["API test automation"],
+  "programmeFirstRequired":true,
+  "sourceTargets":[
+    {"name":"LinkedIn discovery","channel":"linkedin","purpose":"board-discovery","status":"blocked","url":"https://www.linkedin.com/jobs/search/","note":"Login wall"},
+    {"name":"Example careers","channel":"employer-careers","purpose":"employer-ats","employer":"Example","status":"searched","url":"https://careers.example.com/jobs","itemUrls":["https://careers.example.com/jobs/101"]}
   ],
-  "assumptions": ["Only public pages were used."],
-  "jobs": [
-    {
-      "source": "Employer careers site",
-      "sourceUrl": "https://careers.example.com/jobs/NZ-101",
-      "applicationUrl": "https://careers.example.com/jobs/NZ-101/apply",
-      "application": {
-        "method": "online",
-        "url": "https://careers.example.com/jobs/NZ-101/apply",
-        "requiredMaterials": ["CV", "Cover letter"]
-      },
-      "requisitionId": "NZ-101",
-      "title": "Software Test Engineer Intern",
-      "employer": "Example Engineering",
-      "location": "Auckland",
-      "workArrangement": "hybrid",
-      "programmeType": "internship",
-      "contractType": "fixed-term",
-      "workload": "full-time",
-      "engagementModel": "employee",
-      "compensation": { "kind": "paid", "detail": "Hourly rate stated on the vacancy" },
-      "hoursPerWeek": 40,
-      "summary": "API and backend quality-engineering work",
-      "roleFamilies": ["software test engineering", "backend engineering"],
-      "responsibilityAreas": ["API test automation", "backend debugging", "test framework development"],
-      "domains": ["software quality", "developer productivity"],
-      "technicalRequirements": [
-        { "label": "Backend language", "strength": "required", "match": "any", "options": ["Java"] },
-        { "label": "API automation", "strength": "required", "match": "any", "options": ["API automation"] },
-        { "label": "Data tooling", "strength": "preferred", "match": "any", "options": ["SQL"] }
-      ],
-      "requirements": [
-        {
-          "category": "study",
-          "text": "Currently studying at a New Zealand tertiary institution",
-          "strength": "hard",
-          "compatibility": "met",
-          "evidenceSource": "resume",
-          "sourceUrl": "https://careers.example.com/jobs/NZ-101"
-        }
-      ],
-      "workRightsRequirement": {
-        "country": "New Zealand",
-        "requiresCurrentRights": true,
-        "requiresUnrestricted": false,
-        "sponsorshipAvailable": false
-      },
-      "dateEvidence": {
-        "postedAt": [
-          {
-            "value": "2026-08-25",
-            "sourceUrl": "https://careers.example.com/jobs/NZ-101",
-            "sourceType": "employer",
-            "confidence": "high",
-            "observedText": "Posted 25 August 2026"
-          }
-        ],
-        "closesAt": [
-          {
-            "value": "2026-09-30",
-            "sourceUrl": "https://careers.example.com/jobs/NZ-101",
-            "sourceType": "employer",
-            "confidence": "high"
-          }
-        ],
-        "startAt": [
-          {
-            "value": "2026-11-16",
-            "sourceUrl": "https://careers.example.com/jobs/NZ-101",
-            "sourceType": "employer",
-            "confidence": "high"
-          }
-        ],
-        "endAt": [
-          {
-            "value": "2027-02-12",
-            "sourceUrl": "https://careers.example.com/jobs/NZ-101",
-            "sourceType": "employer",
-            "confidence": "high"
-          }
-        ]
-      },
-      "selectionRisks": [],
-      "sourceEvidence": [
-        {
-          "name": "Employer careers site",
-          "url": "https://careers.example.com/jobs/NZ-101",
-          "kind": "employer",
-          "detailPageOpened": true,
-          "applyRouteAvailable": true,
-          "expiredIndicatorVisible": false,
-          "unavailableIndicatorVisible": false,
-          "observedAt": "2026-09-01T09:00:00+12:00",
-          "applicationUrl": "https://careers.example.com/jobs/NZ-101/apply",
-          "requisitionId": "NZ-101"
-        }
-      ],
-      "verificationEvidence": {
-        "detailPageOpened": true,
-        "applyRouteAvailable": true,
-        "expiredIndicatorVisible": false,
-        "unavailableIndicatorVisible": false,
-        "verifiedAt": "2026-09-01T09:00:00+12:00",
-        "notes": []
-      }
-    }
-  ],
-  "relatedOpportunities": [
-    {
-      "kind": "event",
-      "title": "Candidate Meet and Greet",
-      "organisation": "Example Graduate Programme",
-      "url": "https://programme.example.nz/events/meet-and-greet",
-      "registrationStatus": "conditional",
-      "audience": "Candidates already accepted into the programme",
-      "conditions": "Not open to new candidate registrations",
-      "startsAt": "2026-09-14",
-      "verificationEvidence": {
-        "detailPageOpened": true,
-        "applyRouteAvailable": false,
-        "expiredIndicatorVisible": false,
-        "unavailableIndicatorVisible": false,
-        "verifiedAt": "2026-09-01T09:20:00+12:00",
-        "notes": []
-      }
-    }
+  "attempts":[
+    {"roleFamilies":["backend engineering","API test automation"],"strategy":"source-inventory","source":"Example careers","query":"Current public inventory","status":"searched"}
   ]
 }
 ```
 
-## Controlled values
+This fragment is not the whole source plan. Plan web-search, seek, linkedin, trade-me and at least four distinct employer inventories. Add programme inventory for student searches and technical-volunteer source when requested. Blocked/skipped targets still belong in the plan. Coverage remains partial.
 
-- skill/capability level: `core`, `frequent`, `working`, `exposure`;
-- programme type: `internship`, `graduate`, `standard`, `not-stated`;
-- contract type: `fixed-term`, `permanent`, `casual`, `contract`, `not-stated`;
-- workload: `full-time`, `part-time`, `variable`, `not-stated`;
-- constraint strength: `hard`, `soft`;
-- constraint source: `user-explicit`, `conversation-context`, `resume-inferred`, `skill-default`;
-- source-target purpose: `board-discovery`, `programme-inventory`, `employer-ats`, `technical-volunteer`;
-- inventory scope: `listing-page`, `ats-board`, `search-results`, `single-detail`, `event-page`;
-- work-right evidence source: `user-explicit`, `resume`, `official-document`, `unknown`;
-- lead priority: `high`, `normal`, `low`;
-- direct-source status: `found`, `not-found`, `not-checked`;
-- compensation kind: `paid`, `unpaid`, `reimbursed`, `unknown`;
-- requirement strength: `hard`, `preference`;
-- requirement compatibility: `met`, `not-met`, `unknown`;
-- technical requirement strength: `required`, `preferred`, `exposure`;
-- technical requirement matching: `any`, `all`;
-- vacancy evidence source kind: `employer`, `ats`, `job-board`, `aggregator`, `search-result`;
-- attempt status: `searched`, `discovery-only`, `blocked`, `unavailable`, `skipped`;
-- lead status: `assessed`, `duplicate`, `blocked`, `not-opened`, `out-of-scope`, `previously-reported`;
-- opportunity status: `open`, `closed`, `conditional`, `unknown`.
+- Channels: web-search/seek/linkedin/trade-me/employer-careers/public-ats/programme/technical-volunteer.
+- Purposes: board-discovery/programme-inventory/employer-ats/technical-volunteer.
+- Status: searched/discovery-only/blocked/unavailable/skipped.
+- Attempts: one per real operation, strategies programme-discovery/broad-discovery/source-inventory/employer-expansion/focused-follow-up. One roleFamilies array can cover several families. Expansion attempts also identify employer.
+- itemUrls contains actual inspected inventory items. Omit if empty; itemsInspected is derived. inventoryScope defaults listing-page for employer inventories, search-results otherwise; explicit ats-board also valid. Single details/events are not inventories.
+- Deferred relevant employer expansion: lead employerExpansionRequired true, explain employerExpansionReason. Record budget gaps rather than fictional completion.
 
-## Evidence rules
+### Discarded/unresolved lead
 
-### Candidate and preferences
+```json
+{"title":"QA Engineer","employer":"Example","url":"https://careers.example.com/jobs/101","status":"out-of-scope","reason":"Nine months full-time conflicts with summer-only availability","detailPageOpened":true}
+```
 
-- Determine depth from repeated duties, duration, recency, ownership, and outcomes—not keyword count.
-- In `profile` and `combined` modes, include the 64-character SHA-256 of the resume as `resumeFingerprint`. Re-read and re-hash the supplied resume every run. In `criteria` mode, omit it.
-- Keep qualifications and work rights separate from technical skills.
-- Preserve visa wording exactly; temporary or hour-limited rights are not unrestricted. Set `evidenceSource` and leave rights unknown unless the user, CV, or an official document supplies them.
-- Availability uses explicit date windows and maximum weekly hours. Do not replace this with a vague sentence.
-- Explicit user requirements are usually `hard`; inferred preferences and defaults are normally `soft` unless the user clearly made them mandatory.
+Status out-of-scope/duplicate/previously-reported/blocked/not-opened; reason required. Optional priority high/normal/low and directSourceStatus found/not-found/not-checked. Never create a full assessment to justify obvious rejection. Unresolved short links or employer/title mismatches are audit-only, not chat recommendations.
 
-### Search audit
+### Assessed vacancy — plausible survivors only
 
-- `searchCoverage` is required even when no jobs are assessed.
-- `sourceTargets` is required. Every target records `inventoryScope`, the exact inspected `itemUrls`, and an equal `itemsInspected` count. An employer/ATS target names one employer and uses a public employer or ATS listing/board. A programme inventory cannot be a single detail or event page. A required target that is not `searched` makes coverage partial.
-- Record every search operation in `attempts`; the runtime derives coverage and ignores any hand-written `status`.
-- Every discovered lead belongs in `leads`, even if duplicated, inaccessible, out of scope, or not opened.
-- Every assessed lead must match one `jobs[]` record by canonical URL or exact employer/title. Unresolved high-priority leads remain visible in the report.
-- A non-`assessed` lead requires a reason.
-- Every attempt declares one strategy: `broad-discovery`, `source-inventory`, `employer-expansion`, or `focused-follow-up`. `searched` means the intended result set or public inventory was inspected; it does not by itself verify any discovered vacancy.
-- `complete` requires a successful broad-discovery and source-inventory attempt for every intended family, successful expansion of every employer marked as requiring it, and no material required-source failure. Otherwise coverage is partial or blocked.
-- Broad discovery intentionally avoids unnecessary technology constraints. Technology and duty fit are evaluated after candidates are collected.
-- Use a hard `excludeCoreSkill` constraint only when the candidate explicitly rejects that technology as a core day-to-day requirement. This blocks roles requiring it; it does not suppress a role that merely lists it as optional exposure.
-- Every lead records `employerExpansionRequired` and a reason. A role that is closed, senior, permanent, or otherwise unsuitable can still reveal an employer whose current inventory must be inspected.
+```json
+{
+  "source":"Example careers",
+  "sourceUrl":"https://careers.example.com/jobs/101",
+  "title":"Backend Engineering Intern",
+  "employer":"Example",
+  "location":"Auckland",
+  "workArrangement":"hybrid",
+  "programmeType":"internship",
+  "contractType":"fixed-term",
+  "workload":"full-time",
+  "engagementModel":"employee",
+  "hoursPerWeek":40,
+  "duration":{"value":12,"unit":"weeks"},
+  "roleFamilies":["backend engineering"],
+  "responsibilityAreas":["backend development","API test automation"],
+  "domains":[],
+  "technicalRequirements":[{"label":"Language","strength":"required","match":"any","options":["Java","Python"]}],
+  "requirements":[{"category":"study","text":"Enrolled student","strength":"hard","compatibility":"met","evidenceSource":"resume"}],
+  "dateEvidence":{"postedAt":[{"value":"2026-11-02","sourceUrl":"https://careers.example.com/jobs/101","sourceType":"employer","confidence":"high"}]},
+  "observation":{"at":"2026-11-09T10:00:00+13:00","kind":"employer","detailPageOpened":true,"applyRouteAvailable":true},
+  "application":{"method":"online","url":"https://careers.example.com/jobs/101/apply","requiredMaterials":["CV"]}
+}
+```
 
-### Jobs and dates
+Substitute actual facts. Omit unknown hours/duration/dates. Do not derive an exact end date from approximate duration. Missing essential schedule facts cannot be repaired by a technology score.
 
-- `sourceEvidence[]` records every observed source. Employer and ATS sources outrank job boards, search results, and aggregators. `sourceUrl` identifies the exact primary vacancy page.
-- `application` is mandatory for a formal recommendation. Use `method: "online"` with a public application URL, or `method: "email"` with a plain email address, employer instructions, and any stated required materials. A `mailto:` URL alone is not enough.
-- Derive role families and responsibilities from daily duties, not title alone.
-- Put technical requirements in structured `technicalRequirements[]` groups. Use `any` for alternatives and `all` only when every option is required. Put study, degree, work-right, citizenship, availability, security, and export-control rules in `requirements`.
-- A hard `not-met` requirement is a blocker. A hard `unknown` requirement is a caution requiring manual confirmation. A preference does not become a hard blocker.
-- A requirement can be `met` only with `resume`, `user-explicit`, or `official-document` evidence. Unsupported final-year, work-right, sponsorship, grade, availability, and transcript assumptions remain `unknown`.
-- Record programme, contract, and workload independently. A full-time fixed-term summer internship remains an internship.
-- A volunteer role is eligible only when the user requested technical volunteering and the session sets `engagementModel: "volunteer"` and `isTechnicalVolunteer: true`. Record its compensation status explicitly; it is not employee employment.
-- Dates use ISO 8601. Use `YYYY-MM-DD` when only a date is visible. A date-only closing deadline remains open through that entire `Pacific/Auckland` calendar day.
-- Record each date observation separately with URL, source type, and confidence. Do not choose silently between conflicting values; the runtime marks conflicting evidence unverified.
-- Public employer/ATS content has stronger provenance than an indexed snippet. A snippet can remain a discovery lead but cannot make a job verified by itself.
-- Set detail/application evidence only after observing it. An access error is neither an expired indicator nor proof of current availability.
+- programmeType internship/graduate/standard/not-stated; contractType fixed-term/permanent/casual/contract/not-stated; workload full-time/part-time/variable/not-stated. engagementModel employee/independent-contractor/not-stated. "Contract" alone does not prove self-employment.
+- Technical requirements required/preferred, any/all alternatives. Nontechnical requirements hard/preference, compatibility met/not-met/unknown, factual evidenceSource. Optional selectionRisks string array.
+- observation creates verificationEvidence and sourceEvidence once; expired/unavailable default false. For conflicting primary deadlines use explicit verificationEvidence.unresolvedDateConflict true with notes. Multiple sources use sourceEvidence with name, url, kind employer/ats/job-board/aggregator, observedAt and observed flags.
+- Dates postedAt/closesAt/startAt/endAt use observation arrays: value, sourceUrl, sourceType employer/ats/job-board/structured-data/search-result/legacy, confidence high/medium/low. Preserve conflicting primary values. Missing closing date alone is not a conflict.
+- Optional workRightsRequirement country, requiresCurrentRights, requiresUnrestricted; never guess legal conditions.
+- Email application: method email, plain email, employer instructions and requiredMaterials. No mailto-only route.
+- Technical volunteering: isTechnicalVolunteer true, explicit technical duties, compensation kind paid/unpaid/reimbursed/unknown; preferences.includeTechnicalVolunteer true. Do not disguise as employment.
 
-### Related opportunities
+## Report and handoff
 
-- Events, programmes, talent pools, and recruitment channels never belong in `jobs`.
-- `conditional` means useful only to an explicitly eligible audience, such as already-registered candidates.
-- Do not globally suppress a legitimate channel because one candidate does not prefer it; model that user's preference in the current session.
+Optional execution checkpoints startedAt/inputsReadyAt/researchFinishedAt need real observed timestamps with timezone. stopReason finished/budget/blocked. Never reconstruct guessed timings.
 
-### Privacy and history
+Run report on the prepared session. Runtime independently checks employer/title and application identity for a bounded set of survivors; never supply identityVerification as evidence. Use canonical public HTTPS employer/ATS URLs, not unresolved short links or guessed domains. Restricted pages remain unverified, not closed.
 
-- Never record credentials, cookies, tokens, private browser state, or unrelated personal data.
-- Generated reports contain hidden non-sensitive identity/state and scan-context markers. The runtime deduplicates only within the same resume/criteria context, suppresses unchanged roles, and re-reports materially changed evidence as `Updated evidence`.
-- Do not extract, delete, or edit those markers during a scan. The `report` command reads them without a separate file or shell step.
-- User decisions belong in the ignored project-local `.nz-job-scout-state.json`; see [state-file.md](state-file.md). Verification timestamps alone do not make an unchanged opportunity new.
+Return the printed USER SUMMARY without extra roles or claims. It and Markdown share decisions. Remove only the exact temporary session after success, retaining output/.audit. Schema 6 sessions require fresh preparation; renaming their version does not supply missing evidence.
