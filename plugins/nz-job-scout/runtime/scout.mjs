@@ -7,8 +7,10 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-export const PLUGIN_VERSION = '0.8.6';
+export const PLUGIN_VERSION = '0.8.7';
 export const SESSION_SCHEMA_VERSION = 6;
+const RESEARCH_TARGET_SECONDS = 15 * 60;
+const RESEARCH_STOP_SECONDS = 20 * 60;
 const LEVEL_WEIGHT = { core: 1, frequent: 0.85, working: 0.6, exposure: 0.25 };
 const ELIGIBILITY_REQUIREMENT = /\b(degree|qualification|nzqa|tertiary|student|studying|graduate|work rights?|visa|citizen|resident)\b/i;
 const CONCEPT_GROUPS = [
@@ -84,6 +86,38 @@ function postingAgeDays(value, now) {
         return Math.floor((today - Date.parse(`${value}T00:00:00Z`)) / 86_400_000);
     }
     return (now.getTime() - parseDate(value, 'postedAt').getTime()) / 86_400_000;
+}
+// A clock checkpoint, not a claim that the plugin can interrupt Claude's web tools.
+export function scanClock(startedAt, now = new Date()) {
+    const start = startedAt ? parseDate(startedAt, 'startedAt') : now;
+    if (startedAt && !/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(startedAt))
+        throw new Error('startedAt needs a timestamp with a timezone');
+    const elapsedSeconds = Math.floor((now.getTime() - start.getTime()) / 1000);
+    if (elapsedSeconds < 0)
+        throw new Error('startedAt cannot be in the future');
+    return {
+        pluginVersion: PLUGIN_VERSION, startedAt: start.toISOString(), observedAt: now.toISOString(), elapsedSeconds,
+        remainingSeconds: Math.max(0, RESEARCH_STOP_SECONDS - elapsedSeconds),
+        action: elapsedSeconds >= RESEARCH_STOP_SECONDS ? 'report-now'
+            : elapsedSeconds >= RESEARCH_TARGET_SECONDS ? 'finish-verification' : 'continue',
+    };
+}
+function executionTiming(execution, now) {
+    if (!execution)
+        return undefined;
+    const clock = scanClock(execution.startedAt, now);
+    const secondsBetween = (start, end) => start && end
+        ? Math.floor((parseDate(end, 'execution checkpoint') - parseDate(start, 'execution checkpoint')) / 1000) : undefined;
+    for (const field of ['inputsReadyAt', 'researchFinishedAt']) {
+        if (execution[field] && parseDate(execution[field], `execution.${field}`) > now)
+            throw new Error(`execution.${field} cannot be after report generation`);
+    }
+    return {
+        ...clock, stopReason: execution.stopReason,
+        preparationSeconds: secondsBetween(execution.startedAt, execution.inputsReadyAt),
+        researchSeconds: secondsBetween(execution.inputsReadyAt, execution.researchFinishedAt),
+        finalisationSeconds: secondsBetween(execution.researchFinishedAt, now.toISOString()),
+    };
 }
 export function normaliseUrl(value) {
     if (!value)
@@ -311,7 +345,7 @@ function validateDateEvidence(job, index, errors) {
         });
     }
 }
-export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
+export function deriveSearchCoverage(searchCoverage = {}, leads = [], jobs = []) {
     const attempts = asArray(searchCoverage.attempts);
     const families = asArray(searchCoverage.searchFamilies);
     const sourceTargets = asArray(searchCoverage.sourceTargets);
@@ -319,7 +353,7 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
     const programmeFirstRequired = searchCoverage.programmeFirstRequired === true;
     const searched = attempts.filter((attempt) => attempt.status === 'searched');
     const materialFailures = attempts.filter((attempt) => attempt.requiredForCoverage !== false && ['blocked', 'unavailable', 'discovery-only'].includes(attempt.status));
-    const successfulFamilyStrategy = (family, strategy) => searched.some((attempt) => normalise(attempt.roleFamily) === normalise(family) && attempt.strategy === strategy);
+    const successfulFamilyStrategy = (family, strategy) => searched.some((attempt) => [attempt.roleFamily, ...asArray(attempt.roleFamilies)].some((item) => normalise(item) === normalise(family)) && attempt.strategy === strategy);
     const missingBroadDiscoveryFamilies = families.filter((family) => !successfulFamilyStrategy(family, 'broad-discovery'));
     const missingSourceInventoryFamilies = families.filter((family) => !successfulFamilyStrategy(family, 'source-inventory'));
     const unsearchedFamilies = families.filter((family) => missingBroadDiscoveryFamilies.includes(family) && missingSourceInventoryFamilies.includes(family));
@@ -349,7 +383,9 @@ export function deriveSearchCoverage(searchCoverage = {}, leads = []) {
         searchFamilies: families,
         queriesRun: attempts.length,
         leadsDiscovered: leadList.length,
-        detailPagesOpened: leadList.filter((lead) => lead.detailPageOpened === true).length,
+        detailPagesOpened: leadList.filter((lead) => lead.detailPageOpened === true
+            || (lead.detailPageOpened === undefined && jobs.some((job) => leadMatchesJob(lead, job)
+                && canonicaliseJobEvidence(job).verificationEvidence?.detailPageOpened === true))).length,
         attempts,
         unsearchedFamilies,
         missingBroadDiscoveryFamilies,
@@ -393,6 +429,32 @@ export function validateSession(session) {
     }
     if (session.preferences?.mode === 'criteria' && asText(session.resumeFingerprint))
         errors.push('criteria mode must not include resumeFingerprint');
+    if (session.execution !== undefined) {
+        if (!session.execution || typeof session.execution !== 'object' || Array.isArray(session.execution))
+            errors.push('execution must be an object');
+        else {
+            requiredString(session.execution.startedAt, 'execution.startedAt', errors);
+            let previous;
+            for (const field of ['startedAt', 'inputsReadyAt', 'researchFinishedAt']) {
+                const value = session.execution[field];
+                if (value === undefined)
+                    continue;
+                try {
+                    if (typeof value !== 'string' || !/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value))
+                        throw new Error(`execution.${field} needs a timestamp with a timezone`);
+                    const date = parseDate(value, `execution.${field}`);
+                    if (previous && date < previous)
+                        errors.push('execution checkpoints must be chronological');
+                    previous = date;
+                }
+                catch (error) {
+                    errors.push(error.message);
+                }
+            }
+            if (session.execution.stopReason !== undefined && !['finished', 'budget', 'blocked'].includes(session.execution.stopReason))
+                errors.push('execution.stopReason is invalid');
+        }
+    }
     if (session.preferences && !Array.isArray(session.preferences.constraints))
         errors.push('preferences.constraints must be an array');
     asArray(session.preferences?.constraints).forEach((constraint, index) => {
@@ -402,6 +464,8 @@ export function validateSession(session) {
             errors.push(`preferences.constraints[${index}].strength must be hard or soft`);
         if (!['user-explicit', 'conversation-context', 'resume-inferred', 'skill-default'].includes(constraint?.source))
             errors.push(`preferences.constraints[${index}].source is invalid`);
+        if (constraint?.field === 'fullTimeScope' && constraint.value !== 'availability-windows-only')
+            errors.push(`preferences.constraints[${index}].fullTimeScope must be availability-windows-only`);
     });
     if (!session.searchCoverage || typeof session.searchCoverage !== 'object')
         errors.push('searchCoverage is required');
@@ -424,7 +488,10 @@ export function validateSession(session) {
         const statuses = new Set(['searched', 'discovery-only', 'blocked', 'unavailable', 'skipped']);
         const strategies = new Set(['programme-discovery', 'broad-discovery', 'source-inventory', 'employer-expansion', 'focused-follow-up']);
         asArray(session.searchCoverage.attempts).forEach((attempt, index) => {
-            requiredString(attempt?.roleFamily, `searchCoverage.attempts[${index}].roleFamily`, errors);
+            if (attempt?.roleFamilies !== undefined)
+                validateStringArray(attempt.roleFamilies, `searchCoverage.attempts[${index}].roleFamilies`, errors, { nonEmpty: true });
+            else
+                requiredString(attempt?.roleFamily, `searchCoverage.attempts[${index}].roleFamily`, errors);
             requiredString(attempt?.source, `searchCoverage.attempts[${index}].source`, errors);
             requiredString(attempt?.query, `searchCoverage.attempts[${index}].query`, errors);
             if (!statuses.has(attempt?.status))
@@ -513,17 +580,21 @@ export function validateSession(session) {
     const leadPriorities = new Set(['high', 'normal', 'low']);
     const directSourceStatuses = new Set(['found', 'not-found', 'not-checked']);
     asArray(session.leads).forEach((lead, index) => {
-        for (const field of ['title', 'employer', 'source', 'url', 'roleFamily', 'discoveredAt'])
+        const discarded = ['out-of-scope', 'duplicate', 'previously-reported'].includes(lead?.status);
+        for (const field of discarded ? ['title', 'employer', 'url'] : ['title', 'employer', 'source', 'url', 'roleFamily', 'discoveredAt'])
             requiredString(lead?.[field], `leads[${index}].${field}`, errors);
         if (!leadStatuses.has(lead?.status))
             errors.push(`leads[${index}].status is invalid`);
-        if (!leadPriorities.has(lead?.priority))
+        if ((!discarded || lead?.priority !== undefined) && !leadPriorities.has(lead?.priority))
             errors.push(`leads[${index}].priority is invalid`);
-        if (!directSourceStatuses.has(lead?.directSourceStatus))
+        if ((!discarded || lead?.directSourceStatus !== undefined) && !directSourceStatuses.has(lead?.directSourceStatus))
             errors.push(`leads[${index}].directSourceStatus is invalid`);
-        if (typeof lead?.employerExpansionRequired !== 'boolean')
+        if ((!discarded || lead?.employerExpansionRequired !== undefined) && typeof lead?.employerExpansionRequired !== 'boolean')
             errors.push(`leads[${index}].employerExpansionRequired must be boolean`);
-        requiredString(lead?.employerExpansionReason, `leads[${index}].employerExpansionReason`, errors);
+        if (!discarded || lead?.employerExpansionRequired === true)
+            requiredString(lead?.employerExpansionReason, `leads[${index}].employerExpansionReason`, errors);
+        if (lead?.detailPageOpened !== undefined && typeof lead.detailPageOpened !== 'boolean')
+            errors.push(`leads[${index}].detailPageOpened must be boolean`);
         if (lead?.status !== 'assessed' && !asText(lead?.reason))
             errors.push(`leads[${index}].reason is required when status is ${lead?.status}`);
         if (lead?.status === 'assessed' && !asArray(session.jobs).some((job) => leadMatchesJob(lead, job))) {
@@ -545,6 +616,8 @@ export function validateSession(session) {
             requiredString(window?.endAt, `candidate.availabilityWindows[${index}].endAt`, errors);
             if (!(Number(window?.maxHoursPerWeek) > 0))
                 errors.push(`candidate.availabilityWindows[${index}].maxHoursPerWeek must be positive`);
+            if (window?.workload !== undefined && !['full-time', 'part-time'].includes(window.workload))
+                errors.push(`candidate.availabilityWindows[${index}].workload is invalid`);
             for (const field of ['startAt', 'endAt']) {
                 if (window?.[field]) {
                     try {
@@ -555,6 +628,9 @@ export function validateSession(session) {
                     }
                 }
             }
+            if (window?.startAt && window?.endAt && !Number.isNaN(Date.parse(window.startAt)) && !Number.isNaN(Date.parse(window.endAt))
+                && Date.parse(window.endAt) < Date.parse(window.startAt))
+                errors.push(`candidate.availabilityWindows[${index}] ends before it starts`);
         });
         if (session.candidate.workRights) {
             if (!['temporary', 'unrestricted', 'none'].includes(session.candidate.workRights.status))
@@ -573,6 +649,11 @@ export function validateSession(session) {
                 requiredString(item?.name, `candidate.${field}[${index}].name`, errors);
                 if (!Object.hasOwn(LEVEL_WEIGHT, item?.level))
                     errors.push(`candidate.${field}[${index}].level is invalid`);
+                if (item?.evidenceKind !== undefined && !['hands-on', 'certification', 'coursework', 'unknown'].includes(item.evidenceKind))
+                    errors.push(`candidate.${field}[${index}].evidenceKind is invalid`);
+                if (item?.evidenceKind === 'certification' && (item.level !== 'exposure' || Number(item.years ?? 0) > 0)) {
+                    errors.push(`candidate.${field}[${index}] certification alone must be exposure without years of hands-on experience`);
+                }
             });
         }
     }
@@ -592,6 +673,12 @@ export function validateSession(session) {
             errors.push(`jobs[${index}].contractType is invalid`);
         if (!['full-time', 'part-time', 'variable', 'not-stated'].includes(job?.workload))
             errors.push(`jobs[${index}].workload is invalid`);
+        if (job?.duration !== undefined && (!Number.isFinite(Number(job.duration?.value)) || !(Number(job.duration?.value) > 0) || !['days', 'weeks', 'months'].includes(job.duration?.unit)))
+            errors.push(`jobs[${index}].duration needs a positive value and days, weeks, or months unit`);
+        if (job?.verificationEvidence?.unresolvedDateConflict !== undefined && typeof job.verificationEvidence.unresolvedDateConflict !== 'boolean')
+            errors.push(`jobs[${index}].verificationEvidence.unresolvedDateConflict must be boolean`);
+        if (job?.verificationEvidence?.unresolvedDateConflict === true && !asArray(job.verificationEvidence.notes).some((note) => asText(note)))
+            errors.push(`jobs[${index}] unresolved date conflict needs an explanation in verificationEvidence.notes`);
         if (job?.isTechnicalVolunteer !== undefined && typeof job.isTechnicalVolunteer !== 'boolean')
             errors.push(`jobs[${index}].isTechnicalVolunteer must be boolean`);
         if (job?.compensation && !['paid', 'unpaid', 'reimbursed', 'unknown'].includes(job.compensation.kind))
@@ -736,9 +823,9 @@ function semanticSimilarity(left, right) {
 }
 function skillMatch(requiredSkill, candidateEvidence, nowYear) {
     const match = candidateEvidence
-        .map((item) => ({ item, similarity: semanticSimilarity(requiredSkill, item.name) }))
+        .map((item) => ({ item: item.evidenceKind === 'certification' ? { ...item, level: 'exposure', years: 0 } : item, similarity: semanticSimilarity(requiredSkill, item.name) }))
         .filter(({ similarity }) => similarity >= 0.5)
-        .sort((a, b) => b.similarity - a.similarity)[0];
+        .sort((a, b) => b.similarity - a.similarity || (LEVEL_WEIGHT[b.item.level] ?? 0) - (LEVEL_WEIGHT[a.item.level] ?? 0))[0];
     if (!match)
         return undefined;
     const years = Number(match.item.years ?? 0);
@@ -789,7 +876,7 @@ export function scoreRoleFit(candidate, job, now = new Date()) {
     const metRequiredGroups = requiredGroups.filter((group) => group.met).length;
     const requiredTechnology = requiredGroups.length === 0 ? 'Unknown'
         : metRequiredGroups === requiredGroups.length ? 'Met'
-            : technicalGroups.some((group) => group.matched.length) ? 'Partially met' : 'Not met';
+            : metRequiredGroups > 0 ? 'Partially met' : 'Not met';
     const noRequiredSkillMatches = requiredGroups.length > 0 && metRequiredGroups === 0;
     return {
         score: round1(clamp(noRequiredSkillMatches ? Math.min(rawScore, 2.9) : rawScore)),
@@ -843,21 +930,56 @@ function evaluateConstraint(actual, constraints, label, blockers, cautions, posi
 function resolvedJobDates(job) {
     return Object.fromEntries(['postedAt', 'closesAt', 'startAt', 'endAt'].map((field) => [field, resolveDateEvidence(job, field)]));
 }
-function evaluateAvailability(job, candidate, dates) {
+function mergeAvailability(windows) {
+    const merged = [];
+    for (const window of windows.map((item) => ({ start: parseDate(item.startAt, 'availabilityWindows.startAt').getTime(), end: parseDate(item.endAt, 'availabilityWindows.endAt').getTime() }))
+        .sort((a, b) => a.start - b.start)) {
+        const last = merged.at(-1);
+        if (last && window.start <= last.end + 86_400_000)
+            last.end = Math.max(last.end, window.end);
+        else
+            merged.push(window);
+    }
+    return merged;
+}
+function evaluateAvailability(job, candidate, dates, preferences = {}) {
     const windows = asArray(candidate.availabilityWindows);
     const hours = Number(job.hoursPerWeek ?? 0);
+    const boundedFullTime = constraintsFor(preferences, 'fullTimeScope').some((item) => item.strength === 'hard' && item.value === 'availability-windows-only');
+    // Known conflicts must win over absent start/end dates. This is a search
+    // constraint, not an assumption about all students or temporary visa holders.
+    if (boundedFullTime && job.workload === 'full-time' && job.contractType === 'permanent') {
+        return { status: 'incompatible', reason: 'Permanent full-time work conflicts with the explicit window-limited full-time availability' };
+    }
     if (!windows.length)
         return { status: 'unknown', reason: 'No candidate availability windows were recorded' };
+    if (hours > 0 && windows.every((window) => Number(window.maxHoursPerWeek) < hours)) {
+        return { status: 'incompatible', reason: `The stated ${hours} hours/week exceeds every recorded availability window` };
+    }
+    const eligibleWindows = windows.filter((window) => (!hours || hours <= Number(window.maxHoursPerWeek))
+        && (!(boundedFullTime && job.workload === 'full-time') || window.workload === 'full-time' || (hours > 0 && hours <= Number(window.maxHoursPerWeek))));
+    const merged = mergeAvailability(eligibleWindows);
+    if (boundedFullTime && job.workload === 'full-time' && job.duration && merged.length) {
+        // Month lengths vary: use a lower bound to prove a conflict, never invent
+        // exact dates or declare that a role fits merely because its duration fits.
+        const minimumDays = Number(job.duration.value) * ({ days: 1, weeks: 7, months: 28 }[job.duration.unit] ?? 0);
+        const longestDays = Math.max(...merged.map((window) => (window.end - window.start) / 86_400_000 + 1));
+        if (minimumDays > longestDays)
+            return { status: 'incompatible', reason: `The stated full-time duration (${job.duration.value} ${job.duration.unit}) exceeds every confirmed full-time availability window` };
+    }
     if (!dates.startAt.value || !dates.endAt.value)
         return { status: 'unknown', reason: 'Job start/end dates were not both verified' };
-    const start = parseDate(dates.startAt.value, 'startAt');
-    const end = parseDate(dates.endAt.value, 'endAt');
-    for (const window of windows) {
-        const windowStart = parseDate(window.startAt, 'availabilityWindows.startAt');
-        const windowEnd = parseDate(window.endAt, 'availabilityWindows.endAt');
-        if (start >= windowStart && end <= windowEnd && (!hours || hours <= Number(window.maxHoursPerWeek))) {
-            return { status: 'compatible', reason: `Fits availability window ${window.startAt} to ${window.endAt} at up to ${window.maxHoursPerWeek} hours/week` };
-        }
+    const start = parseDate(dates.startAt.value, 'startAt').getTime();
+    const end = parseDate(dates.endAt.value, 'endAt').getTime();
+    if (end < start)
+        return { status: 'incompatible', reason: 'The recorded job end date is before its start date' };
+    if (merged.some((window) => start >= window.start && end <= window.end)) {
+        if (!hours)
+            return { status: 'unknown', reason: 'Job dates fit a recorded availability window, but weekly hours were not verified' };
+        return { status: 'compatible', reason: `Fits availability window at ${hours} hours/week` };
+    }
+    if (!hours && boundedFullTime && job.workload === 'full-time' && windows.some((window) => window.workload === undefined)) {
+        return { status: 'unknown', reason: 'Full-time availability or job weekly hours were not sufficiently specified' };
     }
     return { status: 'incompatible', reason: 'Job dates or hours do not fit any recorded availability window' };
 }
@@ -922,7 +1044,7 @@ export function scorePracticalFit(candidate, preferences, job) {
         score += evaluateConstraint(job.location, legacyConstraints(preferences, 'location', preferences.locations ?? candidate.locations), 'Location', blockers, cautions, positives) * 1.5;
     score += evaluateConstraint(job.workArrangement, legacyConstraints(preferences, 'workArrangement', preferences.workArrangements ?? candidate.workArrangements), 'Work arrangement', blockers, cautions, positives) * 0.5;
     const dates = resolvedJobDates(job);
-    const availability = evaluateAvailability(job, candidate, dates);
+    const availability = evaluateAvailability(job, candidate, dates, preferences);
     if (availability.status === 'compatible') {
         positives.push(availability.reason);
         score += 2;
@@ -1019,6 +1141,10 @@ export function classifyVerification(job, preferences, now = new Date()) {
     if (!evidence.applyRouteAvailable && status === 'verified-active') {
         status = 'unverified';
         reasons.push('No working application route or current application instructions were verified');
+    }
+    if (evidence.unresolvedDateConflict === true && status === 'verified-active') {
+        status = 'unverified';
+        reasons.push('The primary vacancy contains an unresolved date conflict');
     }
     const routeIssues = applicationProblems(job);
     if (routeIssues.length && status === 'verified-active')
@@ -1124,6 +1250,7 @@ function assessmentState(job) {
         applicationUrl: route?.method === 'online' ? route.url : undefined, application: route, requisitionId: job.requisitionId,
         dates: Object.fromEntries(Object.entries(job.verification.dates).map(([field, value]) => [field, { value: value.value, conflict: value.conflict }])),
         programmeType: job.programmeType, contractType: job.contractType, workload: job.workload, engagementModel: job.engagementModel,
+        duration: job.duration, hoursPerWeek: job.hoursPerWeek, workRightsRequirement: job.workRightsRequirement,
         technicalVolunteer: job.isTechnicalVolunteer, compensation: job.compensation, requirements: job.requirements,
         technicalRequirements: job.technicalRequirements,
         strongestSourceKind: bestSourceEvidence(job)?.kind,
@@ -1148,7 +1275,7 @@ export function buildReport(session, options = {}) {
         throw new Error(`Invalid session:\n- ${validation.errors.join('\n- ')}`);
     const now = options.now ? new Date(options.now) : new Date();
     const scanContext = deriveScanContext(session);
-    const coverage = deriveSearchCoverage(session.searchCoverage, session.leads);
+    const coverage = deriveSearchCoverage(session.searchCoverage, session.leads, session.jobs);
     const { unique, duplicates } = deduplicate(session.jobs);
     const evaluated = unique.map((job) => {
         const verification = classifyVerification(job, session.preferences, now);
@@ -1204,6 +1331,7 @@ export function buildReport(session, options = {}) {
         pluginVersion: session.pluginVersion, sessionSchemaVersion: session.sessionSchemaVersion,
         scanContext,
         generatedAt: now.toISOString(), candidate: session.candidate, preferences: session.preferences,
+        execution: executionTiming(session.execution, now),
         searchCoverage: coverage, assumptions: asArray(session.assumptions), leads: asArray(session.leads),
         searchedCount: options.searchedCount ?? session.jobs.length,
         excludedByProjectState: options.excludedByProjectState ?? 0,
@@ -1217,6 +1345,12 @@ function escapeCell(value) { return asText(value).replaceAll('|', '\\|').replace
 function bulletList(values, fallback = 'None recorded') { return values.length ? values.map((value) => `- ${value}`).join('\n') : `- ${fallback}`; }
 function formatAucklandTime(value) {
     return `${new Intl.DateTimeFormat('en-NZ', { dateStyle: 'medium', timeStyle: 'long', timeZone: 'Pacific/Auckland' }).format(new Date(value))} (Pacific/Auckland)`;
+}
+function formatDuration(seconds) { return `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
+function executionSummary(timing) {
+    const phases = [['preparation', timing.preparationSeconds], ['research', timing.researchSeconds], ['session/report', timing.finalisationSeconds]]
+        .filter(([, seconds]) => seconds !== undefined).map(([label, seconds]) => `${label} ${formatDuration(seconds)}`);
+    return `Elapsed from recorded clock start: ${formatDuration(timing.elapsedSeconds)}${phases.length ? ` (${phases.join('; ')})` : ''}. Stop reason: ${timing.stopReason ?? 'not recorded'}.`;
 }
 function dateSummary(job) { return `Posted: ${job.verification.dates.postedAt.value ?? 'not verified'}; closes: ${job.verification.dates.closesAt.value ?? 'not verified'}`; }
 function jobMarker(job) { return `<!-- nz-job-scout:item ${JSON.stringify({ kind: 'job', identities: jobIdentityKeys(job), fingerprint: job.stateFingerprint, status: job.verification.status })} -->`; }
@@ -1253,7 +1387,7 @@ function renderJobDetails(job, heading) {
         `- Compensation: ${job.compensation ? `${job.compensation.kind}${job.compensation.detail ? ` — ${job.compensation.detail}` : ''}` : 'not stated'}`,
         `- ${dateSummary(job)}`, `- Verified: ${job.verificationEvidence.verifiedAt}`, '',
         '**Why it matches**', '', bulletList(job.roleFit.evidence), '',
-        ...(job.roleFit.gaps.length || job.practicalFit.cautions.length ? ['**Main consideration**', '', ...bulletList([...job.roleFit.gaps, ...job.practicalFit.cautions]), ''] : []),
+        ...(job.roleFit.gaps.length || job.practicalFit.cautions.length ? ['**Main consideration**', '', bulletList([...job.roleFit.gaps, ...job.practicalFit.cautions]), ''] : []),
         '**Apply**', '', `- Vacancy page: [Open job description](${job.sourceUrl})`, ...applyLines,
         `- Required materials: ${materials}`, '',
     ];
@@ -1298,10 +1432,18 @@ export function renderMarkdown(report) {
         report.recommended.forEach((job, index) => lines.push(...renderJobDetails(job, `### ${index + 1}. ${job.title} — ${job.employer}`), jobMarker(job)));
     }
     if (report.stretch.length) {
-        lines.push('', '## Worth considering', '', '> These roles have a usable application path but are a weaker day-to-day fit.', '', ...table(report.stretch));
+        lines.push('', '## Worth considering', '', '> These roles have a usable application path and no recorded hard conflict, but fit or practical details still need checking.', '', ...table(report.stretch));
         report.stretch.forEach((job, index) => lines.push(...renderJobDetails(job, `### ${index + 1}. ${job.title} — ${job.employer}`), jobMarker(job)));
     }
     lines.push('', '## Scan notes', '');
+    if (report.execution) {
+        const timing = report.execution;
+        lines.push(`- ${executionSummary(timing)}`);
+        if (timing.elapsedSeconds > RESEARCH_STOP_SECONDS)
+            lines.push('- The 20-minute research wrap-up threshold was exceeded; this is not a hard limit on Claude or an in-flight web request.');
+    }
+    else
+        lines.push('- Execution timing: not recorded; no elapsed-time claim can be made.');
     lines.push(`- Baseline sources completed: ${completedBaselineSources}/${plannedBaselineSources} (4 discovery channels + ${coverage.primaryInventoriesRequired ?? MINIMUM_PRIMARY_INVENTORIES} public employer/ATS inventories required)`);
     lines.push(`- Public sources checked: ${coverage.sourceTargets.filter((source) => source.status === 'searched').map((source) => `[${source.name}](${source.url})`).join(', ') || 'none'}`);
     if (restrictedSources.length)
@@ -1311,7 +1453,7 @@ export function renderMarkdown(report) {
     if (coverage.missingPrimaryInventories)
         lines.push(`- Missing public employer/ATS inventories: ${coverage.missingPrimaryInventories}`);
     lines.push(`- Search activity: ${coverage.leadsDiscovered} leads found; ${coverage.detailPagesOpened} detail pages opened; ${report.searchedCount} listings assessed.`);
-    lines.push(`- Not included: ${report.rejected.length + report.manualVerification.length} roles without a recent verified primary vacancy page or usable application route.`);
+    lines.push(`- Not included: ${report.incompatible.length} with practical conflicts; ${report.lowFit.length} with low role fit; ${report.closed.length} closed/unavailable; ${report.otherUnverified.length + report.manualVerification.length} stale, unverified, or without a usable application route.`);
     lines.push('', '<!-- NZ Job Scout state metadata: used only for incremental reports -->');
     return `${lines.join('\n')}\n`;
 }
@@ -1633,6 +1775,11 @@ function parseArgs(argv) {
         const token = rest[index];
         if (token === '--input' || token === '-i')
             values.input = rest[++index];
+        else if (token === '--since') {
+            values.since = rest[++index];
+            if (!values.since)
+                throw new Error('--since requires a timestamp');
+        }
         else if (token === '--output' || token === '-o')
             values.output = rest[++index];
         else if (token === '--allow-custom-output')
@@ -1644,12 +1791,16 @@ function parseArgs(argv) {
     }
     return values;
 }
-function usage() { return ['NZ Job Scout runtime', '', 'Usage:', '  nz-job-scout validate --input SESSION.json', '  nz-job-scout report --input SESSION.json', '  nz-job-scout report --input SESSION.json --output REPORT.md --allow-custom-output'].join('\n'); }
+function usage() { return ['NZ Job Scout runtime', '', 'Usage:', '  nz-job-scout clock [--since ISO_TIMESTAMP]', '  nz-job-scout validate --input SESSION.json', '  nz-job-scout report --input SESSION.json', '  nz-job-scout report --input SESSION.json --output REPORT.md --allow-custom-output'].join('\n'); }
 export async function runCli(argv = process.argv.slice(2)) {
     try {
         const args = parseArgs(argv);
         if (args.help || !args.command) {
             console.log(usage());
+            return 0;
+        }
+        if (args.command === 'clock') {
+            console.log(JSON.stringify(scanClock(args.since)));
             return 0;
         }
         if (!args.input)
@@ -1659,7 +1810,7 @@ export async function runCli(argv = process.argv.slice(2)) {
             const result = validateSession(session);
             if (!result.valid)
                 throw new Error(result.errors.join('\n'));
-            const coverage = deriveSearchCoverage(session.searchCoverage, session.leads);
+            const coverage = deriveSearchCoverage(session.searchCoverage, session.leads, session.jobs);
             console.log(`Valid session: ${session.jobs.length} assessed listing(s), ${session.leads.length} lead(s), ${coverage.status} coverage`);
             return 0;
         }
@@ -1674,6 +1825,8 @@ export async function runCli(argv = process.argv.slice(2)) {
             }
             const { lookbackDays, separateContext } = report.historySummary;
             console.log(`Report history: same resume and criteria only, ${lookbackDays}-day lookback; skipped ${report.excludedPreviouslyReported} unchanged item(s).${separateContext ? ' Today’s default report belongs to a different context; using a separate report.' : ''}`);
+            if (report.execution)
+                console.log(executionSummary(report.execution));
             return 0;
         }
         throw new Error(`Unknown command: ${args.command}`);

@@ -14,9 +14,22 @@ In criteria mode, use `name: "Not supplied"`, requested role families only, empt
 
 ## Complete example
 
+Optional fields added in 0.8.7 (schema 6 remains compatible):
+
+- `execution`: copy real `clock` outputs into `startedAt`, `inputsReadyAt`, and `researchFinishedAt`; optional `stopReason` is `finished`, `budget`, or `blocked`. All timestamps need timezones and chronological order. Omit unobserved checkpoints, never estimate them. The report measures preparation, combined discovery/verification research, and session/report finalisation; it does not claim timings for unmeasured substeps.
+- `searchCoverage.attempts[].roleFamilies`: an optional non-empty array instead of legacy `roleFamily`. Use it when one real inventory/search operation covers several intended families; it counts once, not as multiple fabricated operations.
+- `candidate.availabilityWindows[].workload`: `full-time` or `part-time` when explicitly known, alongside actual weekly-hour limits. Do not infer visa permission from the schedule.
+- `preferences.constraints[]`: when the user explicitly limits full-time work to the recorded windows, use `{ "field": "fullTimeScope", "value": "availability-windows-only", "strength": "hard", "source": "user-explicit" }` (or `conversation-context` for a previously stated restriction). It rejects permanent full-time and proven overlong full-time commitments without requiring exact job dates. Do not apply it to every student or temporary visa holder.
+- `jobs[].duration`: preserve a stated period such as `{ "value": 9, "unit": "months" }`; units are `days`, `weeks`, `months`. It is not a substitute for dates. With a window-limited full-time constraint, duration can prove a conflict; duration fitting a window never proves that the unspecified start/end dates fit.
+- `candidate.skills[]` / `capabilities[]`: optional `evidenceKind` is `hands-on`, `certification`, `coursework`, or `unknown`. Certification-only evidence must have `level: "exposure"` and zero/omitted `years`; do not convert a certificate into practical experience. Actual hands-on work and the credential can be recorded separately.
+- `jobs[].verificationEvidence.unresolvedDateConflict`: optional boolean for a contradictory primary deadline that cannot be reconciled; explain the conflict in `verificationEvidence.notes`. This blocks verification. An absent closing date alone is not a conflict.
+- Discarded leads (`out-of-scope`, `duplicate`, `previously-reported`) may be lightweight: `{ "title": "Example", "employer": "Example", "url": "https://careers.example.nz/job/1", "status": "out-of-scope", "reason": "Known workload conflicts with the request", "detailPageOpened": false }`. Keep employer-expansion flags and reasons when a relevant uninspected employer needs expansion; deferred expansion keeps coverage partial. Assessed or unresolved high-value leads still use the richer record below.
+
+For `assessed` leads, omitted `detailPageOpened` can be derived from the matching vacancy's observed primary evidence. Do not guess it for other leads or retroactively mark all discoveries opened. Unfinished planned sources/expansions may be `skipped` with a budget reason; validation does not require performing every planned operation before reporting partial results.
+
 ```json
 {
-  "pluginVersion": "0.8.6",
+  "pluginVersion": "0.8.7",
   "sessionSchemaVersion": 6,
   "resumeFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate": {
