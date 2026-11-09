@@ -12,5 +12,6 @@ await mkdir(dirname(bundled), { recursive: true });
 await copyFile(compiled, bundled);
 await copyFile(compiledProvider, bundledProvider);
 await copyFile(resolve(packageRoot, 'dist/src/runtime/identity.mjs'), resolve(packageRoot, 'runtime/identity.mjs'));
+await copyFile(resolve(packageRoot, 'dist/src/runtime/board-session.mjs'), resolve(packageRoot, 'runtime/board-session.mjs'));
 console.log(`Synced generated runtime: ${bundled}`);
 console.log(`Synced generated ATS provider runtime: ${bundledProvider}`);

@@ -11,7 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createIdentityVerifier, isShortVacancyUrl } from './identity.mjs';
 
-export const PLUGIN_VERSION = '0.8.8';
+export const PLUGIN_VERSION = '0.8.9';
 export const SESSION_SCHEMA_VERSION = 7;
 const RESEARCH_TARGET_SECONDS = 15 * 60;
 const RESEARCH_STOP_SECONDS = 20 * 60;

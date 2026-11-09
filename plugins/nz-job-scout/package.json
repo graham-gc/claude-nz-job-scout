@@ -1,6 +1,6 @@
 {
   "name": "@graham-gc/nz-job-scout",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "description": "Core utilities and zero-dependency runtime for the nz-job-scout Claude Code plugin.",
   "type": "module",
@@ -15,7 +15,7 @@
     "build:check": "tsc -p tsconfig.json && node scripts/check-runtime.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && npm run test:runtime",
-    "test:runtime": "node --test tests/runtime.test.mjs"
+    "test:runtime": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": ">=22 <26",

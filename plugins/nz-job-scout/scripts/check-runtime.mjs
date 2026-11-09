@@ -10,7 +10,9 @@ const bundledProvider = await readFile(resolve(packageRoot, 'runtime/provider.mj
 
 const compiledIdentity = await readFile(resolve(packageRoot, 'dist/src/runtime/identity.mjs'), 'utf8');
 const bundledIdentity = await readFile(resolve(packageRoot, 'runtime/identity.mjs'), 'utf8');
-if (compiled !== bundled || compiledProvider !== bundledProvider || compiledIdentity !== bundledIdentity) {
+const compiledBoard = await readFile(resolve(packageRoot, 'dist/src/runtime/board-session.mjs'), 'utf8');
+const bundledBoard = await readFile(resolve(packageRoot, 'runtime/board-session.mjs'), 'utf8');
+if (compiled !== bundled || compiledProvider !== bundledProvider || compiledIdentity !== bundledIdentity || compiledBoard !== bundledBoard) {
   console.error('Bundled runtime is stale. Run npm run build and include the generated runtime files.');
   process.exitCode = 1;
 } else {

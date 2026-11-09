@@ -11,6 +11,7 @@ allowed-tools:
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock --since *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" inventory-batch --board *)'
+  - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" board-details --url *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" prepare --input *)'
   - 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" report --input *)'
   - Bash(rm -- .nz-job-scout-session-*.json)
@@ -45,7 +46,7 @@ Start the clock before reading the CV:
 node "${CLAUDE_PLUGIN_ROOT}/bin/nz-job-scout" clock
 ```
 
-Expect `pluginVersion: "0.8.8"`; evidence uses `sessionSchemaVersion: 7`. Schema 6 is no longer accepted. A stale version or broken runtime is a limitation to report, not permission to repair, build, install, copy into a cache, or edit source code. Do not inspect source/tests during a scan.
+Expect `pluginVersion: "0.8.9"`; evidence uses `sessionSchemaVersion: 7`. Schema 6 is no longer accepted. A stale version or broken runtime is a limitation to report, not permission to repair, build, install, copy into a cache, or edit source code. Do not inspect source/tests during a scan.
 
 Keep the returned `startedAt`. After input preparation, before another batch of optional research, and immediately before reporting, check the same start time:
 
@@ -83,7 +84,11 @@ Plan web search, SEEK, **LinkedIn**, Trade Me Jobs, and four distinct confirmed 
 
 For every intended family, attempt broad role/stage/location discovery and a relevant public inventory. Record any budget-limited gap instead of silently dropping the family. One inspected inventory can support several families; record them in one attempt's `roleFamilies` array, without refetching or duplicating the operation. Use a few broad queries, not title/technology permutations. For student work, inspect broad early-career listings before stack-specific searches; retain generic technical titles such as Technology Services Intern for duty review.
 
-Use `WebSearch` for discovery and `WebFetch` for public employer/ATS pages. Indexed SEEK, LinkedIn, Trade Me and aggregator results are leads, not final verification. Never request credentials, cookies, logged-in browser state or employer-only APIs. Stop at login walls, CAPTCHA, 401/403/429, or robots restrictions. After a restricted source, make at most one public employer-copy search; never retry the restriction using scripts or alternate endpoints.
+Use `WebSearch` for discovery and `WebFetch` for public employer/ATS pages. Indexed SEEK, LinkedIn, Trade Me and aggregator results are leads, not final verification.
+
+For up to five high-value exact SEEK NZ or LinkedIn job URLs discovered in this run, use one `board-details --url 'OBSERVED_VACANCY_URL' --url 'ANOTHER_OBSERVED_VACANCY_URL'` command with the bundled CLI. It sends the initial detail request using the user's opt-in saved session, without first trying the same URL anonymously. Do not run login/setup yourself, request passwords or cookies, or read session files. If the result is `not-configured`, continue the public scan; if it is `login-required`, note that the user can sign in again. `read` provides job-board evidence only, not independent verification or proof of an open application. Do not mark a URL opened if its request was skipped or did not return details. Record board details as `job-board` evidence; use only an independently verified employer/ATS URL for an actionable recommendation.
+
+Stop at CAPTCHA, 401/403/429, or robots restrictions. Do not use employer-only APIs, follow blocked login or challenge redirects, or retry a restriction using scripts or alternate endpoints. After a restricted or unreadable board detail, make at most one public employer-copy search. Never treat a restriction or missing HTML as proof of closure.
 
 Collect confirmed supported ATS board URLs from employer pages and query them together:
 

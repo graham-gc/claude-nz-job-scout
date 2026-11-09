@@ -8,7 +8,7 @@ Minimal initial shape (illustrative facts only):
 
 ```json
 {
-  "pluginVersion":"0.8.8",
+  "pluginVersion":"0.8.9",
   "sessionSchemaVersion":7,
   "resumeFingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "candidate":{

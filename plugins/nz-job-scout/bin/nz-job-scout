@@ -7,4 +7,7 @@ const command = process.argv[2];
 if (command === 'inventory-batch' || command === 'inventory') {
   try { await (command === 'inventory-batch' ? runInventoryBatchCli : runInventoryCli)(process.argv.slice(3)); }
   catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+} else if (command === 'board-login' || command === 'board-details') {
+  try { await (await import('../runtime/board-session.mjs')).runBoardCli(command, process.argv.slice(3)); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
 } else await runCli();

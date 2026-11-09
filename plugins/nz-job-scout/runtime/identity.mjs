@@ -40,7 +40,7 @@ export function requestPublicDocument(value, timeoutMs = 4000) {
         // Pin each connection to a checked address, rather than validating DNS and
         // allowing a second resolution to reach a private address.
         const request = get(url, {
-            headers: { 'User-Agent': 'NZJobScout/0.8.8', Accept: 'text/html,application/json', 'Accept-Encoding': 'identity' },
+            headers: { 'User-Agent': 'NZJobScout/0.8.9', Accept: 'text/html,application/json', 'Accept-Encoding': 'identity' },
             lookup(host, options, callback) {
                 lookup(host, { all: true }, (error, addresses) => {
                     if (error)
