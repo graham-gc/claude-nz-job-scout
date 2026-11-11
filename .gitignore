@@ -153,3 +153,9 @@ output/
 .nz-job-scout-judgments.json
 .claude/
 .DS_Store
+
+# Scratch replay projects (offline before/after comparison)
+.compare/project-*/
+
+# Offline before/after comparison artefacts (replay tooling + recorded outputs)
+.compare/

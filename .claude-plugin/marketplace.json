@@ -7,9 +7,9 @@
   "plugins": [
     {
       "name": "nz-job-scout",
-      "source": "./plugins/nz-job-scout",
+      "source": "./",
       "description": "Find, verify, and rank publicly accessible New Zealand jobs using a local CV or user-supplied search criteria.",
-      "version": "0.8.9",
+      "version": "1.0.0-dev.2",
       "category": "productivity"
     }
   ]

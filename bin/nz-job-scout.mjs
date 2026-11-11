@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { readJson } from '../src/store.mjs';
 import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult } from '../src/engine.mjs';
 import { produce } from '../src/report.mjs';
 
+const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const help = `NZ Job Scout v1 (development)
 All commands run in the target project, not the plugin cache. JSON output only.
+  version
   start --input request.json --resume /absolute/resume.pdf
   discover --run RUN_ID
   index --run RUN_ID [--offset 100]
@@ -29,7 +34,20 @@ try {
   if (a.help || !command) { process.stdout.write(help + '\n'); process.exit(0); }
   const required = (...names) => { for (const name of names) if (!a[name]) throw new Error(`Missing --${name}; use --help`); };
   let result;
-  if (command === 'start') { required('input', 'resume'); result = await start(project, await readJson(a.input), a.resume); }
+  if (command === 'version') {
+    // Report the version of the code that is actually running, not of some cached copy.
+    const read = async (...parts) => { try { return JSON.parse(await readFile(join(pluginRoot, ...parts), 'utf8')); } catch { return null; } };
+    const manifest = await read('.claude-plugin', 'plugin.json');
+    const pkg = await read('package.json');
+    result = {
+      version: manifest?.version ?? pkg?.version ?? null,
+      pluginRoot,
+      manifestVersion: manifest?.version ?? null,
+      packageVersion: pkg?.version ?? null,
+      consistent: Boolean(manifest?.version && pkg?.version && manifest.version === pkg.version),
+    };
+  }
+  else if (command === 'start') { required('input', 'resume'); result = await start(project, await readJson(a.input), a.resume); }
   else {
     required('run');
     result = await inRun(project, a.run, async (state, reader, root) => {

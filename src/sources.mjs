@@ -1,5 +1,7 @@
-import { load } from 'cheerio';
-import { newRecord, fromApi, fromHtml, canonical, clean } from './evidence.mjs';
+import { load } from './html.mjs';
+import { hash } from './store.mjs';
+import { publicUrl, countDetail } from './net.mjs';
+import { newRecord, fromApi, fromHtml, canonical, canonicalLocal, clean } from './evidence.mjs';
 
 export const SOURCES = [
   { id: 'contact', name: 'Contact Energy', provider: 'smartrecruiters', account: 'ContactEnergy', url: 'https://api.smartrecruiters.com/v1/companies/ContactEnergy/postings?limit=100', officialUrl: 'https://contact.co.nz/About-Us/Careers', boardUrl: 'https://jobs.smartrecruiters.com/contactenergy' },
@@ -7,15 +9,31 @@ export const SOURCES = [
   { id: 'accesso', name: 'accesso', provider: 'greenhouse', account: 'accesso', url: 'https://boards-api.greenhouse.io/v1/boards/accesso/jobs?content=true', officialUrl: 'https://accesso.com/careers/', boardUrl: 'https://job-boards.greenhouse.io/accesso' },
   { id: 'pushpay', name: 'Pushpay', provider: 'greenhouse', account: 'pushpay', url: 'https://boards-api.greenhouse.io/v1/boards/pushpay/jobs?content=true', officialUrl: 'https://pushpay.com/about-us/careers/new-zealand/', boardUrl: 'https://job-boards.greenhouse.io/pushpay' },
   { id: 'pushpay-nz', name: 'Pushpay NZ official inventory', provider: 'official-links', account: 'pushpay', url: 'https://pushpay.com/about-us/careers/new-zealand/' },
-  { id: 'asb', name: 'ASB Bank', provider: 'asb', account: 'asb', url: 'https://careers.asbgroup.co.nz/search', officialUrl: 'https://careers.asbgroup.co.nz', boardUrl: 'https://careers.asbgroup.co.nz/search' },
-  { id: 'linkedin', name: 'LinkedIn public discovery', provider: 'linkedin', account: 'public', url: 'https://nz.linkedin.com/jobs/software-engineer-jobs-auckland' },
+  { id: 'asb', name: 'ASB Bank', provider: 'asb', account: 'asb', url: 'https://careers.asbgroup.co.nz/search', officialUrl: 'https://careers.asbgroup.co.nz', boardUrl: 'https://careers.asbgroup.co.nz/search' }
 ];
+
+const slug = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+// Discovery entry points follow the requested role families and location instead
+// of a hard-coded "Auckland software engineer" listing.
+export function sourcesFor(config) {
+  const list = SOURCES.map(s => ({ ...s }));
+  const roles = (config.roleFamilies ?? []).map(slug).filter(Boolean).slice(0, 2);
+  const places = config.location?.onsiteCities?.length ? config.location.onsiteCities.map(slug) : [slug(config.location?.country ?? 'New Zealand')];
+  const entries = [];
+  for (const role of roles.length ? roles : ['jobs']) {
+    for (const place of places.length ? places : ['new-zealand']) {
+      entries.push({ id: `linkedin-${role}-${place}`, name: `LinkedIn public discovery (${role}, ${place})`, provider: 'linkedin', account: 'public', url: `https://nz.linkedin.com/jobs/${role}-jobs-${place}` });
+    }
+  }
+  return [...list, ...entries.slice(0, 2)];
+}
 
 export function recognised(url) {
   const u = new URL(url), p = u.pathname.split('/').filter(Boolean);
   if (u.hostname === 'job-boards.greenhouse.io' && p[0]) return { provider: 'greenhouse', account: p[0], ...(p[1] === 'jobs' && /^\d+$/.test(p[2]) ? { advertisement: p[2] } : {}) };
   if (u.hostname === 'jobs.lever.co' && p[0]) return { provider: 'lever', account: p[0], ...(/^[a-f0-9-]{36}$/.test(p[1] ?? '') ? { advertisement: p[1] } : {}) };
   if (u.hostname === 'jobs.smartrecruiters.com' && p[0]) return { provider: 'smartrecruiters', account: p[0], ...(/^\d+(?:-|$)/.test(p[1] ?? '') ? { advertisement: p[1].split('-')[0] } : {}) };
+  if (u.hostname === 'jobs.ashbyhq.com' && p[0]) return { provider: 'ashby', account: p[0], ...(p[1] && !/^\d+$/.test(p[1]) ? { advertisement: p[1] } : {}) };
   if (u.hostname === 'careers.asbgroup.co.nz') return { provider: 'asb', account: 'asb' };
   return { provider: 'html', account: '' };
 }
@@ -37,7 +55,8 @@ export function parseListing(source, response, run) {
       if (!url) continue;
       const lead = { url, title: job.title ?? job.name ?? job.text, employer, provider: source.provider, account: source.account, advertisement: String(job.id ?? ''), authority: 'registered-official', sourceKey: source.id, discoveredFrom: response.url };
       const record = fromApi(newRecord(lead, run), job, response, employer);
-      record.association = source.association ?? { basis: 'curated-seed', officialUrl: source.officialUrl, boardUrl: source.boardUrl, evidence: 'docs/v1-scan-spec.md: confirmed seed associations; not re-verified every run' };
+      // A pre-registered association is a seed, not a verification made in this run.
+      record.association = source.association ?? { basis: 'curated-seed', officialUrl: source.officialUrl ?? null, boardUrl: source.boardUrl ?? null, evidence: 'docs/v1-scan-spec.md: confirmed seed associations; re-verified on demand via inventory --official' };
       if (!record.fields.title.value) throw new Error('ATS schema not recognised: titles missing');
       records.push(record);
     }
@@ -56,7 +75,11 @@ export function parseListing(source, response, run) {
       const a = $(e), href = a.attr('href');
       try {
         const item = a.closest('li,.base-card');
-        leads.push({ url: canonical(new URL(href, response.url).href), title: clean(item.find('h3').text() || a.text()), employer: clean(item.find('h4').text()), provider: 'linkedin', account: 'public', sourceKey: 'linkedin', discoveredFrom: response.url, relativeAge: clean(item.find('time').text()) });
+        const relativeAge = clean(item.find('time').text());
+        leads.push({ url: canonical(new URL(href, response.url).href), title: clean(item.find('h3').text() || a.text()), employer: clean(item.find('h4').text()), provider: 'linkedin', account: 'public', sourceKey: source.id, discoveredFrom: response.url, relativeAge,
+          // The wording is kept with its source and observation time; no exact
+          // first-publication date is invented from it.
+          relativePublication: relativeAge ? { text: relativeAge, source: { url: response.url, observedAt: response.observedAt } } : null });
       } catch {}
     });
   } else {
@@ -69,7 +92,15 @@ export function parseListing(source, response, run) {
   return { records, leads: unique, total: null, returned: unique.length };
 }
 
-export async function readDetail(record, reader) {
+// The HTML job page is the primary vacancy document. The JSON API only fills
+// what the page does not state.
+export async function readDetail(record, reader, { gaps = null } = {}) {
+  const wanted = gaps ?? [];
+  if (!countDetail(reader.state, record.sourceKey)) {
+    record.detailError = 'Per-source detail-read ceiling reached; this record keeps its remaining gaps';
+    record.gaps = wanted;
+    return record;
+  }
   const url = record.detailUrl ?? record.canonicalUrl;
   try {
     const response = await reader.get(url, 'detail', record.sourceKey);
@@ -78,6 +109,8 @@ export async function readDetail(record, reader) {
       let job; try { job = JSON.parse(response.body); } catch { throw new Error('Invalid ATS JSON'); }
       fromApi(record, job, response, record.fields.employer?.value ?? record.lead.employer);
     } else fromHtml(record, response);
+    record.detailReadUrl = response.url;
+    record.detailSnapshot = response.snapshot;
   } catch (error) { record.detailError = error.message; }
   return record;
 }

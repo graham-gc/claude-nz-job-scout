@@ -3,39 +3,91 @@ import { key } from './evidence.mjs';
 
 export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 const dayNumber = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
-const fields = new Set(['location', 'workArrangement', 'hoursPerWeek', 'engagement', 'contractType', 'durationWeeks', 'startAt', 'endAt', 'workRights']);
+const fields = new Set(['location', 'workArrangement', 'hoursPerWeek', 'engagement', 'contractType', 'duration', 'durationWeeks', 'durationMonths', 'startAt', 'endAt', 'workRights']);
 export function criteria(input) {
   if (!input || !Array.isArray(input.roleFamilies) || !input.roleFamilies.length || input.roleFamilies.some(x => typeof x !== 'string' || !x.trim())) throw new Error('roleFamilies must contain the requested role families');
+  const disclosures = [];
+  const location = input.location ?? { country: 'New Zealand', onsiteCities: [], remoteOutside: true };
+  if (!input.location) disclosures.push('未提供 location：地区按国家层级（New Zealand）判定，未默认任何城市；城市级匹配需显式提供 onsiteCities。');
   const result = { roleFamilies: input.roleFamilies, postingDays: input.postingDays ?? 7,
-    location: input.location ?? { country: 'New Zealand', onsiteCities: ['Auckland'], remoteOutside: true },
-    all: input.all ?? [], any: input.any ?? [], preferences: input.preferences ?? [], exclusions: input.exclusions ?? [], includeTalentPools: input.includeTalentPools === true };
+    location: { country: location.country ?? 'New Zealand', onsiteCities: location.onsiteCities ?? [], remoteOutside: location.remoteOutside !== false },
+    all: input.all ?? [], any: input.any ?? [], preferences: input.preferences ?? [], exclusions: input.exclusions ?? [],
+    includeTalentPools: input.includeTalentPools === true, disclosures };
   if (!Number.isInteger(result.postingDays) || result.postingDays < 1 || result.postingDays > 365) throw new Error('postingDays must be 1–365');
-  if (result.location.country !== 'New Zealand' || !Array.isArray(result.location.onsiteCities) || !result.location.onsiteCities.length || typeof result.location.remoteOutside !== 'boolean') throw new Error('location needs country New Zealand, onsiteCities and remoteOutside');
+  if (result.location.country !== 'New Zealand') throw new Error('location needs country New Zealand');
+  if (!Array.isArray(result.location.onsiteCities) || result.location.onsiteCities.some(c => typeof c !== 'string' || !c.trim())) throw new Error('location.onsiteCities must be a list of city names (may be empty)');
+  if (typeof result.location.remoteOutside !== 'boolean') throw new Error('location needs country New Zealand, onsiteCities and remoteOutside');
   if (!Array.isArray(result.all) || !Array.isArray(result.any) || result.any.some(g => !Array.isArray(g) || !g.length)) throw new Error('all is a list of conditions; any is a list of nonempty alternative condition lists');
   for (const c of [...result.all, ...result.any.flat()]) {
     if (!c || !fields.has(c.field) || !['eq', 'in', 'lte', 'gte', 'contains'].includes(c.op) || c.value == null) throw new Error('Invalid condition: see references/input.md for fields and operators');
     if (c.op === 'in' && (!Array.isArray(c.value) || !c.value.length)) throw new Error('in requires a nonempty array');
     if (['lte', 'gte'].includes(c.op) && typeof c.value !== 'number' && !/^\d{4}-\d{2}-\d{2}$/.test(c.value)) throw new Error('lte/gte require a number or ISO date');
+    if (['duration', 'durationWeeks', 'durationMonths'].includes(c.field) && c.valueUnit && !['weeks', 'months'].includes(c.valueUnit)) throw new Error('valueUnit must be weeks or months');
   }
+  if (!result.location.onsiteCities.length) disclosures.push('location.onsiteCities 为空：不会把任何城市判为冲突。');
   return result;
 }
 export const contextHash = (criteria, resumeHash) => hash({ criteria, resumeHash });
 const verdict = (name, status, detail) => ({ name, status, detail });
+
+// Duration keeps its own unit. Weeks are never converted into months, or months into weeks.
+export function durationValue(record, field) {
+  const d = record.fields.duration?.value;
+  if (!d || typeof d !== 'object') return { amount: null, unit: null };
+  if (field === 'durationWeeks') return d.unit === 'weeks' ? { amount: d.amount, unit: 'weeks' } : { amount: null, unit: d.unit };
+  if (field === 'durationMonths') return d.unit === 'months' ? { amount: d.amount, unit: 'months' } : { amount: null, unit: d.unit };
+  return { amount: d.amount, unit: d.unit };
+}
 export function condition(record, c) {
+  const name = c.label ?? c.field;
+  if (['duration', 'durationWeeks', 'durationMonths'].includes(c.field)) {
+    const { amount, unit } = durationValue(record, c.field);
+    if (amount == null) return verdict(name, 'unknown', `duration not stated in the requested unit (${unit ?? 'none stated'}); no conversion is applied`);
+    const wanted = c.valueUnit ?? (c.field === 'durationMonths' ? 'months' : 'weeks');
+    if (unit !== wanted) return verdict(name, 'unknown', `${amount} ${unit} stated; the condition is expressed in ${wanted}; no conversion is applied`);
+    const pass = c.op === 'lte' ? amount <= c.value : c.op === 'gte' ? amount >= c.value : c.op === 'eq' ? amount === c.value : String(amount).includes(String(c.value));
+    return verdict(name, pass ? 'satisfied' : 'conflict', `${amount} ${unit} ${c.op} ${JSON.stringify(c.value)}`);
+  }
   const v = record.fields[c.field]?.value;
-  if (v == null) return verdict(c.label ?? c.field, 'unknown', `${c.field} not stated/read`);
+  if (v == null) return verdict(name, 'unknown', `${c.field} not stated/read`);
   const pass = c.op === 'eq' ? key(v) === key(c.value) : c.op === 'in' ? c.value.some(x => key(x) === key(v))
     : c.op === 'contains' ? key(v).includes(key(c.value)) : c.op === 'lte' ? v <= c.value : v >= c.value;
-  return verdict(c.label ?? c.field, pass ? 'satisfied' : 'conflict', `${v} ${c.op} ${JSON.stringify(c.value)}`);
+  return verdict(name, pass ? 'satisfied' : 'conflict', `${v} ${c.op} ${JSON.stringify(c.value)}`);
 }
+
+const NZ_PLACES = ['auckland', 'wellington', 'christchurch', 'hamilton', 'tauranga', 'dunedin', 'napier', 'queenstown', 'rotorua',
+  'palmerston north', 'new plymouth', 'whangarei', 'invercargill', 'hastings', 'whanganui', 'taupo', 'te puke', 'tokoroa', 'gore',
+  'cambridge', 'motueka', 'feilding', 'levin', 'greymouth', 'wanaka', 'pukekohe', 'waiuku', 'orewa', 'masterton', 'lower hutt',
+  'upper hutt', 'petone', 'porirua', 'takapuna', 'paraparaumu', 'palmerston', 'kapiti', 'hawkes bay', 'bay of plenty', 'waikato',
+  'taranaki', 'wairarapa', 'nelson', 'marlborough', 'otago', 'southland', 'west coast', 'canterbury', 'northland', 'gisborne',
+  'new zealand', 'nz', 'aotearoa'];
+const FOREIGN_PLACES = ['united states', 'united kingdom', 'england', 'scotland', 'wales', 'ireland', 'australia', 'canada',
+  'singapore', 'germany', 'india', 'china', 'japan', 'france', 'netherlands', 'philippines', 'south africa', 'brazil', 'mexico',
+  'italy', 'spain', 'poland', 'sweden', 'norway', 'denmark', 'switzerland', 'austria', 'belgium', 'argentina', 'indonesia',
+  'vietnam', 'thailand', 'malaysia', 'uae', 'united arab emirates', 'israel', 'turkey', 'greece', 'portugal', 'finland',
+  'new york', 'california', 'texas', 'colorado', 'florida', 'washington', 'massachusetts', 'illinois', 'ontario', 'quebec',
+  'british columbia', 'nsw', 'victoria', 'queensland', 'wa ', 'nsw '];
+const REMOTE_ONLY = /^\s*(?:remote|fully remote|work from home|wfh|anywhere|100% remote)\s*$/i;
+
+export function locationVerdict(record, config) {
+  const location = (record.fields.location?.value ?? '').trim();
+  const arrangement = record.fields.workArrangement?.value;
+  if (!location) return verdict('Location', 'unknown', 'Job location not stated/read');
+  if (FOREIGN_PLACES.some(p => p.trim().length > 2 && location.toLowerCase().includes(p))) return verdict('Location', 'conflict', `Location outside New Zealand: ${location}`);
+  if (REMOTE_ONLY.test(location)) return verdict('Location', 'unknown', `Remote only; the posting does not state whether the employer hires in ${config.location.country}`);
+  const nz = NZ_PLACES.some(p => new RegExp(`\\b${p.trim()}\\b`, 'i').test(location));
+  if (!nz) return verdict('Location', 'unknown', `Region not parsed from "${location}"; treated as unknown, not as a match`);
+  const cities = config.location.onsiteCities ?? [];
+  if (!cities.length) return verdict('Location', 'satisfied', `In ${config.location.country} and no specific city was requested: ${location}`);
+  const inCity = cities.some(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}\\b`, 'i').test(location));
+  if (inCity) return verdict('Location', 'satisfied', location);
+  if (arrangement === 'remote' && config.location.remoteOutside) return verdict('Location', 'satisfied', `${location}; role is stated as remote and remote work is allowed`);
+  return verdict('Location', 'conflict', `In ${config.location.country} but not in the requested cities (${cities.join(', ')}): ${location}`);
+}
+
 export function hardChecks(record, config, now) {
-  const f = record.fields, checks = [], location = f.location?.value ?? '';
-  const inCity = config.location.onsiteCities.some(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(location));
-  const foreign = /united states|united kingdom|australia|california|canada|singapore|\bUSA\b/i.test(location);
-  const inNZ = !foreign && /new zealand|\bNZ\b|auckland|wellington|christchurch|hamilton|tauranga|dunedin/i.test(location);
-  checks.push(verdict('Location', !location ? 'unknown' : inCity && inNZ ? 'satisfied'
-    : inNZ && config.location.remoteOutside && f.workArrangement?.value === 'remote' ? 'satisfied'
-      : inNZ && config.location.remoteOutside && !f.workArrangement?.value ? 'unknown' : 'conflict', location || 'Job location not stated/read'));
+  const f = record.fields, checks = [];
+  checks.push(locationVerdict(record, config));
   const posted = f.postedAt;
   if (!posted?.value || !['first-published', 'advertised-date'].includes(posted.semantics)) checks.push(verdict('Recent publication', 'unknown', posted?.value ? `${posted.semantics}: ${posted.value}; not first-publication evidence` : 'First-publication date not stated/read'));
   else {
@@ -60,14 +112,26 @@ export function hardChecks(record, config, now) {
   }
   return checks;
 }
+
 export function classify(record, config, judgment, now) {
   const checks = hardChecks(record, config, now);
   if (record.closure) return { category: 'closed', checks, reason: `${record.closure.scope} explicitly closed` };
-  if (record.identityConflict) return { category: 'unresolved', checks, reason: 'Conflicting identities share a URL; no automatic recommendation' };
+  // An identity anomaly is neither a recommendation nor a high-value lead.
+  if (record.anomalies?.length || record.identityConflict) return { category: 'identity-anomaly', checks, reason: 'Identity could not be resolved across sources; not recommended' };
+  if (record.opportunityKind?.value === 'talent-pool') {
+    // Allowing talent pools is not allowing every talent pool. A pool is
+    // still bound by the hard conditions and by the duty match: a pool in
+    // another country, or one whose responsibilities were never assessed,
+    // is not a lead and never enters the recommendation area.
+    if (!config.includeTalentPools) return { category: 'excluded', checks, reason: 'Expression of interest/talent pool, not a confirmed vacancy' };
+    if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: 'Talent pool conflicts with a hard condition' };
+    if (!judgment) return { category: 'excluded', checks, reason: 'Talent pool without a responsibility assessment' };
+    if (judgment.fit === 'weak') return { category: 'excluded', checks, reason: 'Talent pool responsibilities do not match' };
+    return { category: 'pool', checks, reason: 'Expression of interest/talent pool, not a confirmed vacancy' };
+  }
   if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: 'Known hard-condition conflict' };
   if (!judgment) return { category: 'unassessed', checks, reason: 'No responsibility assessment' };
   if (judgment.fit === 'weak') return { category: 'excluded', checks, reason: 'Responsibilities do not match' };
-  if (record.opportunityKind?.value === 'talent-pool') return { category: config.includeTalentPools ? 'pool' : 'excluded', checks, reason: 'Expression of interest/talent pool, not a confirmed vacancy' };
   if (record.readState !== 'read' || record.authority !== 'registered-official' || !record.fields.employer?.value || !record.fields.title?.value) return { category: 'unresolved', checks, reason: 'Primary vacancy not fully read or employer association/identity unconfirmed' };
   if (checks.some(x => x.status === 'unknown' && !x.advisory) || record.application.status !== 'verified') return { category: 'check', checks, reason: 'Missing hard-condition evidence or unverified application route' };
   return { category: 'ready', checks, reason: 'All required checks and application route verified' };

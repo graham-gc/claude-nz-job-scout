@@ -46,11 +46,34 @@ export async function readJson(path, fallback) {
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
 }
 export function runPath(root, id) { return join(root, '.nz-job-scout', 'runs', validRun(id)); }
+// A lock is only stale when the process that owns it is gone. A live lock is
+// never removed, so two concurrent commands still cannot share a run.
+export async function staleLock(lock) {
+  let info;
+  try { info = await readJson(lock); } catch { return false; }
+  const pid = Number(info?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return false;
+  try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; }
+}
 export async function locked(root, id, action) {
   const folder = runPath(root, id), file = join(folder, 'run.json'), lock = join(folder, 'command.lock');
   await guard(root, lock);
-  const handle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600)
-    .catch(e => { if (e.code === 'EEXIST') throw new Error('Run is locked by another command; do not run commands concurrently'); throw e; });
+  let handle;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      handle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      break;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      if (attempt === 0 && await staleLock(lock)) { await unlink(lock).catch(() => {}); continue; }
+      throw new Error('Run is locked by another command; do not run commands concurrently');
+    }
+  }
+  try {
+    await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }) + '\n');
+    await handle.sync();
+  } catch { /* the lock itself is the mutual exclusion; its payload is advisory */ }
   try {
     await guard(root, file);
     const state = await readJson(file);
