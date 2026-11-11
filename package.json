@@ -1,0 +1,9 @@
+{
+  "name": "nz-job-scout",
+  "version": "1.0.0-dev.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test tests/*.test.mjs", "check": "node --check bin/nz-job-scout.mjs" },
+  "dependencies": { "cheerio": "1.1.2", "ipaddr.js": "2.2.0", "robots-parser": "3.0.1" }
+}

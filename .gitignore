@@ -146,3 +146,10 @@ vite.config.ts.timestamp-*
 output/
 .nz-job-scout-state.json
 .nz-job-scout-session-*.json
+
+# v1 private evidence, resume extraction and model inputs
+.nz-job-scout/
+.nz-job-scout-request.json
+.nz-job-scout-judgments.json
+.claude/
+.DS_Store
