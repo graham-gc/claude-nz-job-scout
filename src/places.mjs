@@ -2,12 +2,20 @@
 // location string names, and the criteria decide what that name means for the
 // request. Neither one guesses on its own, and neither one carries its own
 // copy of the lists.
-export const NZ_PLACES = ['auckland', 'wellington', 'christchurch', 'hamilton', 'tauranga', 'dunedin', 'napier', 'queenstown', 'rotorua',
+// Cities and regions. A posting that names one of them has stated where the
+// job is, at a level a city request can be checked against.
+export const NZ_LOCALITIES = ['auckland', 'wellington', 'christchurch', 'hamilton', 'tauranga', 'dunedin', 'napier', 'queenstown', 'rotorua',
   'palmerston north', 'new plymouth', 'whangarei', 'invercargill', 'hastings', 'whanganui', 'taupo', 'te puke', 'tokoroa', 'gore',
   'cambridge', 'motueka', 'feilding', 'levin', 'greymouth', 'wanaka', 'pukekohe', 'waiuku', 'orewa', 'masterton', 'lower hutt',
   'upper hutt', 'petone', 'porirua', 'takapuna', 'paraparaumu', 'palmerston', 'kapiti', 'hawkes bay', 'bay of plenty', 'waikato',
-  'taranaki', 'wairarapa', 'nelson', 'marlborough', 'otago', 'southland', 'west coast', 'canterbury', 'northland', 'gisborne',
-  'new zealand', 'nz', 'aotearoa'];
+  'taranaki', 'wairarapa', 'nelson', 'marlborough', 'otago', 'southland', 'west coast', 'canterbury', 'northland', 'gisborne'];
+
+// The country itself. A posting that names only the country has said where the
+// employer hires, but not in which city: "Aotearoa" does not prove "not
+// Auckland", so it can never be read as a location conflict.
+export const NZ_COUNTRY_NAMES = ['new zealand', 'nz', 'aotearoa'];
+
+export const NZ_PLACES = [...NZ_LOCALITIES, ...NZ_COUNTRY_NAMES];
 
 // Countries, states and regions that are outside New Zealand. A posting that
 // names one of them is a location conflict, not an unknown: the posting said
@@ -56,6 +64,9 @@ const placeHit = (text, list) => {
   return best;
 };
 export const nzPlace = text => placeHit(text, NZ_PLACES);
+// A city or region named in the text, as opposed to the country as a whole.
+export const nzLocality = text => placeHit(text, NZ_LOCALITIES);
+export const nzCountry = text => placeHit(text, NZ_COUNTRY_NAMES);
 export const foreignPlace = text => placeHit(text, FOREIGN_PLACES);
 
 export const usStateCode = text => {

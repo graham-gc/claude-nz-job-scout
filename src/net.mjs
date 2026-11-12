@@ -44,8 +44,9 @@ export function requestPublic(url, timeoutMs = 8000) {
 }
 
 // A robots.txt fetch belongs to the source it protects: it is counted inside
-// that source's group (boards, linkedin or search) and additionally against a
-// robots ceiling of its own.
+// that source's group (boards, linkedin or search) and against the stage and
+// per-source budgets like any other request. It has no ceiling of its own: a
+// robots read that was never made is a lead nobody judged, not a refusal.
 // The group follows the source family, not one hard-coded id: discovery entry
 // points are per role family and per location, and every one of them must be
 // charged to the family it belongs to.
@@ -74,10 +75,11 @@ export function charge(state, stage, source, kind = 'http') {
   const groupLimit = state.budget.groupLimits[group];
   // Group ceilings describe the discovery mix; later stages have their own limits.
   if (stage === 'discovery' && groupLimit != null && state.budget.groups[group] >= groupLimit) throw new Error(`${group} discovery budget exhausted`);
-  // robots.txt reads are counted inside the source group and against a ceiling
-  // of their own, so a run cannot spend its whole discovery budget on them.
+  // robots.txt reads are counted like any other request: inside the stage
+  // budget, inside the source group and inside the per-source stage ceiling.
+  // A real robots prohibition is a separate matter and is enforced where the
+  // response is read, not here.
   const robotsRead = kind === 'robots';
-  if (robotsRead && (state.budget.robotsUsed ?? 0) >= (state.budget.robotsLimit ?? 6)) throw new Error('robots discovery budget exhausted');
   const perSource = state.budget.sourceLimits ?? {};
   const used = state.budget.sourceUsed[source] ?? { requests: 0, items: 0, details: 0, stages: {} };
   // Per-source ceilings are counted per stage. Discovery spend on one board

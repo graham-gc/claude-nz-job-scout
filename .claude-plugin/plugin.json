@@ -1,6 +1,6 @@
 {
   "name": "nz-job-scout",
-  "version": "1.0.0-dev.3",
+  "version": "1.0.0-dev.4",
   "description": "Resume-led New Zealand job discovery with runtime-owned evidence and actionable application reports.",
   "author": { "name": "Graham Cheng" }
 }

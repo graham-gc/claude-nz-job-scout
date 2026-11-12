@@ -1,7 +1,7 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
-import { closureBoundToAdvertisement } from './evidence.mjs';
-import { foreignScope, isForeignPlace, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
+import { channelKind, closureBoundToAdvertisement } from './evidence.mjs';
+import { foreignScope, isForeignPlace, nzLocality, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
 
 export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 const dayNumber = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
@@ -81,6 +81,9 @@ export function locationVerdict(record, config) {
   const inCity = cities.some(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}\\b`, 'i').test(location));
   if (inCity) return verdict('Location', 'satisfied', location);
   if (arrangement === 'remote' && config.location.remoteOutside) return verdict('Location', 'satisfied', `${location}; role is stated as remote and remote work is allowed`);
+  // The country alone says where the employer hires, not in which city:
+  // "Aotearoa" does not prove "not in Auckland", so it stays unknown.
+  if (!nzLocality(location)) return verdict('Location', 'unknown', `Only the country is stated ("${location}"); no city is named, so the posting is not proved to be outside ${cities.join(', ')}`);
   return verdict('Location', 'conflict', `In ${config.location.country} but not in the requested cities (${cities.join(', ')}): ${location}`);
 }
 
@@ -112,6 +115,11 @@ export function hardChecks(record, config, now) {
   return checks;
 }
 
+// A recruitment channel that addresses employers is not a vacancy and not a
+// talent pool. It is recognised from the page's own text, so the rule holds
+// for every record whose body has been read.
+export const isChannel = record => record.opportunityKind?.value === 'employer-channel' || Boolean(channelKind(record.fields.duties?.value ?? ''));
+
 export function classify(record, config, judgment, now) {
   const checks = hardChecks(record, config, now);
   // A closure closes the vacancy only when the employer said so, on the
@@ -125,6 +133,11 @@ export function classify(record, config, judgment, now) {
   }
   // An identity anomaly is neither a recommendation nor a high-value lead.
   if (record.anomalies?.length || record.identityConflict) return { category: 'identity-anomaly', checks, reason: 'Identity could not be resolved across sources; not recommended' };
+  // An employer-facing recruitment channel is not a vacancy and not a talent
+  // pool. It is disclosed as a channel to follow up; it never becomes a
+  // recommendation, and a candidate-side entry point on it is never taken for
+  // a verified application route.
+  if (isChannel(record)) return { category: 'channel', checks, reason: 'Employer-facing recruitment channel: the page addresses employers and the candidate-side entry point is not verified — a channel to check, not a job recommendation' };
   if (record.opportunityKind?.value === 'talent-pool') {
     // Allowing talent pools is not allowing every talent pool. A pool is
     // still bound by the hard conditions and by the duty match: a pool in

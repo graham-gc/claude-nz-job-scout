@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { load } from './html.mjs';
 import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
-import { criteria, contextHash, hardChecks } from './criteria.mjs';
+import { criteria, contextHash, hardChecks, isChannel } from './criteria.mjs';
 import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean } from './evidence.mjs';
 import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
 import { siteKey } from './site.mjs';
@@ -167,9 +167,9 @@ export async function start(project, input, resumePath, options = {}) {
         // Per-stage ledgers: the report prints the numbers of the stage it
         // describes, so a detail read can never be shown as discovery spend.
         stageGroups: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
-        // robots.txt reads are counted inside their source group and against
-        // this ceiling of their own.
-        robotsLimit: 6, robotsUsed: 0,
+        // robots.txt reads are counted inside their source group and inside the
+        // stage and per-source budgets; they have no ceiling of their own.
+        robotsUsed: 0,
         stageRobots: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
         sourceLimits: { discoveryRequests: 4, detailRequests: 8, applicationRequests: 4, items: 200, details: 6 },
         sourceUsed: {}
@@ -655,7 +655,9 @@ export async function verifyApplication(record, reader) {
 // small number of high-value unknowns. Unverified jobs are never promoted.
 export function applicationPlan(state, judgments, exclusions, now, budget) {
   const fitOf = r => judgments.find(j => j.recordId === r.recordId)?.fit;
-  const scored = state.records.filter(r => r.readState === 'read' && !r.closure && !excluded(r, exclusions)).map(r => {
+  // An employer channel is not a vacancy: verifying an application route for it
+// would spend the application budget on a page that offers no vacancy.
+  const scored = state.records.filter(r => r.readState === 'read' && !r.closure && !isChannel(r) && !excluded(r, exclusions)).map(r => {
     const checks = hardChecks(r, state.config, now);
     const conflicts = checks.filter(c => c.status === 'conflict').length;
     const unknowns = checks.filter(c => c.status === 'unknown' && !c.advisory).length;

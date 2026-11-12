@@ -187,7 +187,12 @@ export function observeText(record, text, response) {
   const salaryNumbers = salaryMatch ? [...salaryMatch.matchAll(/[\d,]+/g)].map(m => Number(m[0].replace(/,/g, ''))) : [];
   set('salary', salaryMatch && !SALARY_PLACEHOLDER.test(salaryMatch.trim()) && salaryNumbers.length && salaryNumbers.every(n => n > 0) ? salaryMatch : null, salaryMatch);
   const kind = poolKind(record, body);
-  if (kind) record.opportunityKind = fact('talent-pool', response, kind);
+  // A channel that recruits employers is neither a vacancy nor a talent pool:
+  // the page itself is the employer-facing side, and the candidate-side entry
+  // point on it is not a verified application route.
+  const channel = channelKind(body);
+  if (channel) record.opportunityKind = fact('employer-channel', response, channel);
+  else if (kind) record.opportunityKind = fact('talent-pool', response, kind);
   const dates = name => {
     const pattern = name === 'postedAt'
       ? /(?:Posted on|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+20\d{2})/i
@@ -240,6 +245,38 @@ export function poolKind(record, body) {
     }
   }
   return null;
+}
+
+// An employer channel is a page whose own subject is recruiting employers, not
+// candidates: it tells the reader to register as an employer, to list roles
+// and to search candidate profiles. Such a page is not a vacancy, and it is
+// not a talent pool either: what it offers is an event or a platform for
+// employers, and the candidate-side entry point on it is not a verified
+// application route.
+//
+// Two independent employer-facing instructions are required, so an employer
+// phrase inside an ordinary job ad cannot turn a vacancy into a channel. A
+// page that gives the candidate a route of its own is never a channel.
+const CHANNEL_SUBJECT = [
+  { re: /\bregister as an employer\b/i },
+  { re: /\b(?:create|set up|build) your (?:organisation|organization|company|employer) profile\b/i },
+  { re: /\blist your (?:intern|grad|graduate|job|role|vacancy|opening|position)s?\b/i },
+  { re: /\bsearch (?:more than |over |up to )?[\d,]{2,}\s*(?:candidate|talent|student)?\s*profiles\b/i },
+  { re: /\bmeet\b[^.]{0,60}\bcandidates\b/i },
+  { re: /\b(?:hire|hiring)\s+(?:your\s+|the\s+)?(?:interns|graduates|students|candidates)\b/i }
+];
+// A candidate route on the same page means the page addresses the candidate.
+const CANDIDATE_ROUTE = /\bapply now\b|\bapply for (?:this|our|the) (?:job|role|position)\b|\bsubmit (?:your |an )?application\b|\bsend (?:us |your )?(?:cv|resume)\b|\bstart (?:your )?application\b/i;
+export function channelKind(body) {
+  const text = String(body ?? '');
+  if (!text) return null;
+  if (CANDIDATE_ROUTE.test(text)) return null;
+  const hits = CHANNEL_SUBJECT.filter(p => p.re.test(text));
+  if (hits.length < 2) return null;
+  for (const sentence of sentences(text)) {
+    if (hits.some(h => h.re.test(sentence))) return clean(sentence).slice(0, 300);
+  }
+  return hits.map(h => h.re.source).join('；').slice(0, 300);
 }
 
 // The body of a posting, read from whichever structure the platform returned.

@@ -136,6 +136,20 @@ function jobLines(item, preferences = []) {
   lines.push(`- 记录：\`${r.recordId}\`；字段证据：${evidence.join('；')}`, '');
   return lines;
 }
+// A recruitment channel is disclosed with its own evidence. It never looks
+// like a job: no application route is claimed for it.
+function channelLines(item) {
+  const { record: r } = item;
+  const title = value(r, 'title') === '未披露／未读到' ? r.lead.title || '未确认渠道' : value(r, 'title');
+  const employer = r.fields.employer?.value ?? r.lead.employer ?? '未确认雇主';
+  const lines = [`- ${esc(title)} — ${esc(employer)}：${esc(item.reason ?? '')}`];
+  const obs = obstacles(item);
+  if (obs.length) lines.push(`  - 障碍：${obs.join('；')}`);
+  const unread = unreadReason(r);
+  if (unread) lines.push(`  - 未读原因：${esc(unread)}`);
+  lines.push(`  - 页面：${link('渠道页面', r.canonicalUrl)}`, `  - 记录：\`${r.recordId}\``);
+  return lines;
+}
 export function render(report) {
   const { state, items, newItems, overflow = [], withdrawals, pendingHistory } = report;
   const record = id => report.records[id];
@@ -152,6 +166,13 @@ export function render(report) {
     const section = newItems.filter(i => i.category === category);
     if (section.length) for (const item of section) lines.push(...jobLines({ ...item, record: record(item.recordId) }, preferences));
     else lines.push(category === 'ready' ? '在可访问的来源中没有新增的、核验通过且有可用申请方式的岗位。' : '本轮无新增。', '');
+  }
+  const channels = items.filter(i => i.category === 'channel');
+  if (channels.length) {
+    lines.push('## 渠道待核查（面向雇主的招聘渠道，不是岗位推荐）', '',
+      '以下条目是面向雇主方的招聘活动或平台页面。页面本身不是可投的空缺，候选人侧的报名入口本轮未核验；它们只作为可跟进的渠道披露，不进入推荐，也不计入岗位统计。', '');
+    for (const item of channels) lines.push(...channelLines({ ...item, record: record(item.recordId) }));
+    lines.push('');
   }
   if (overflow.length) {
     lines.push('## 本轮其余记录（按 ID 索引，完整字段见同目录 JSON 侧车）', '');
@@ -184,6 +205,7 @@ export function render(report) {
   for (const w of withdrawals) lines.push(`- 撤回此前${w.scope === 'advertisement' ? '广告' : '岗位'}：${esc(w.title)} — ${esc(w.employer)}。${esc(w.reason)}（不改写历史报告）`);
   if (pendingHistory.length) lines.push(`- ${pendingHistory.length} 个历史推荐本轮未重新核实：不等于已关闭。`);
   lines.push(`- 已决定排除：${items.filter(i => i.category === 'decided').length}；无实质变化而不重复展示：${report.unchanged}。`,
+    `- 招聘渠道待核查：${channels.length} 条（面向雇主的渠道页面，不是岗位推荐，不计入岗位统计）。`,
     `- 发现 ${Object.keys(report.records).length} 条记录；已评估 ${items.filter(i => i.judgment).length} 条；未评估 ${items.filter(i => i.category === 'unassessed').length} 条。未评估不等于不合适。`,
     '', '## 来源与预算', '');
   for (const s of state.sources) lines.push(`- ${link(s.name, s.url)}：${s.status}；实际读到 ${s.reviewed} 条${s.advertisedTotal != null ? `／列表标称 ${s.advertisedTotal}` : ''}。${esc(s.reason ?? s.note ?? '')}`);
@@ -198,7 +220,7 @@ export function render(report) {
   };
   const request = state.request ?? null;
   lines.push(`- WebSearch：${state.tickets.length ? state.tickets.map(t => `ticket ${t.id}: ${t.status}${t.error ? ` (${esc(t.error)})` : ''}`).join('；') : 'not-started'}。搜索工具的结果由模型报回；不可观察上游内部请求。`,
-    `- 可观察调用／预留票据（${request ? '本次请求累计账目，含本轮' : '本次运行账目'}）：${stageLine('discovery', '发现')}；${stageLine('detail', '详情')}；${stageLine('application', '申请')}。robots.txt 读取合计 ${budget.robotsUsed ?? 0}/${budget.robotsLimit ?? 6} 次；跳转和 robots 请求均已计入上列数字。`);
+    `- 可观察调用／预留票据（${request ? '本次请求累计账目，含本轮' : '本次运行账目'}）：${stageLine('discovery', '发现')}；${stageLine('detail', '详情')}；${stageLine('application', '申请')}。robots.txt 读取合计 ${budget.robotsUsed ?? 0} 次；跳转和 robots 请求均已计入上列数字，没有单独的 robots 上限。`);
   if (request) {
     const own = request.own?.used ?? request.own ?? {};
     lines.push(`- 本次请求（requestId ${esc(request.requestId ?? '')}，${request.kind === 'new' ? '本次开启的新请求' : '本次请求的续跑'}）：同一请求内的所有轮次共用同一份可观察调用预算（发现 ${limits.discovery ?? 20}／详情 ${limits.detail ?? 20}／申请 ${limits.application ?? 10}），本轮为该请求的第 ${request.runIndex}/${request.maxRuns} 轮，重开 run 不会把预算重置。同一请求同时只有一个活跃运行：产出报告即结束该运行，未完成的运行用 end --run RUN_ID 关闭，之后才能续跑。用户明确发起的新一次扫描用 start --new-request 开启新请求：新请求的预算独立，不结转上一次请求的用量。本轮自身用掉：发现 ${own.discovery ?? 0}、详情 ${own.detail ?? 0}、申请 ${own.application ?? 0}。`,
@@ -238,6 +260,8 @@ export async function produce(root, state, reader, input, now = new Date().toISO
     else if (!r || r.readState !== 'read') pendingHistory.push(old.recordId);
   }
   const promoted = items2.filter(i => ['ready', 'check', 'pool', 'unresolved'].includes(i.category));
+  // Channels are disclosed on their own, never promoted.
+  const channels = items2.filter(i => i.category === 'channel');
   const allNew = promoted.filter(i => !previous.some(p => p.material === i.material))
     .sort((a, b) => (a.judgment?.fit === 'strong' ? 0 : 1) - (b.judgment?.fit === 'strong' ? 0 : 1) || b.preferenceScore - a.preferenceScore);
   const visible = [], counts = {};
@@ -264,7 +288,7 @@ export async function produce(root, state, reader, input, now = new Date().toISO
   await put(root, json, { ...report, newItems: visible.map(i => ({ recordId: i.recordId, category: i.category, fit: i.judgment?.fit ?? null })) });
   await put(root, md, render(report));
   state.reported = { json, md };
-  return { report: md, records: json, coverage: report.coverage, ready: visible.filter(i => i.category === 'ready').length, needsChecking: visible.filter(i => ['check', 'unresolved'].includes(i.category)).length, withdrawals: withdrawals.length };
+  return { report: md, records: json, coverage: report.coverage, ready: visible.filter(i => i.category === 'ready').length, needsChecking: visible.filter(i => ['check', 'unresolved'].includes(i.category)).length, channels: channels.length, withdrawals: withdrawals.length };
 }
 function overlap(a = [], b = []) {
   const set = new Set(a);
