@@ -165,13 +165,15 @@ export class Reader {
       this.state.blockedSources[source] = 'robots restriction'; throw new Error('Robots restriction; no retry');
     }
     const response = await this.fetchWithRetry(url, stage, source);
+    // A restriction belongs to the site that imposed it. The source key is
+    // that site or ATS tenant, so one employer's refusal cannot block another
+    // employer's tenant on the same platform.
     if ([401, 403, 429].includes(response.status)) {
       this.state.blockedSources[source] = `HTTP ${response.status}`;
-      this.state.blockedSources[u.origin] = `HTTP ${response.status}`;
       throw new Error(`Source restricted (${response.status}); no alternate endpoint retry`);
     }
     if (response.status === 200 && /<title>\s*(?:just a moment|access denied)|verify (?:that )?you are human|id=["']cf-chl/i.test(response.body)) {
-      this.state.blockedSources[source] = 'challenge page'; this.state.blockedSources[u.origin] = 'challenge page';
+      this.state.blockedSources[source] = 'challenge page';
       throw new Error('Source restricted by a challenge page; no bypass');
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {

@@ -1,6 +1,8 @@
 import { load, decodeEntities } from './html.mjs';
 import { hash } from './store.mjs';
 import { publicUrl } from './net.mjs';
+import { placeFragment } from './places.mjs';
+import { tenantOf } from './site.mjs';
 
 export const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 export const key = value => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -71,7 +73,7 @@ export function newRecord(lead, run) {
     lead: { title: lead.title ?? '', employer: lead.employer ?? '', discoveredFrom: lead.discoveredFrom ?? lead.url },
     ids: { advertisement: lead.advertisement ?? null, apiPosting: lead.apiPosting ?? null, platformJob: null, requisition: null },
     fields: {}, readState: 'not-read', closure: null, application: { status: 'not-checked', reason: 'Not checked' },
-    detailUrl: lead.detailUrl ?? null, applicationUrl: lead.applicationUrl ?? null, sourceKey: lead.sourceKey ?? 'web-search',
+    detailUrl: lead.detailUrl ?? null, applicationUrl: lead.applicationUrl ?? null, sourceKey: lead.sourceKey ?? 'unattributed',
     // A relative publication wording ("20 hours ago") is kept as it was written,
     // with its source and observation time. It is never turned into a date.
     relativePublication: lead.relativePublication ?? null,
@@ -113,7 +115,7 @@ const CONTRACT_PATTERNS = [
   { re: /(?:contract|employment)\s*type\s*[:\-]\s*(permanent|fixed[\s-]?term)/i },
   { re: /(?:this|the)\s+(?:role|position|job|vacancy)\s+is\s+(?:a\s+)?(permanent|fixed[\s-]?term|temporary)/i, map: m => /fixed|temporary/i.test(m[1]) ? 'fixed-term' : 'permanent' },
   { re: /\b(permanent)\s+(?:position|role|contract|employment)\b/i },
-  { re: /\b(fixed[\s-]?term)\s+(?:contract|position|role|employment)\b/i },
+  { re: /\b(fixed[\s-]?term)\s+(?:contract|position|role|employment|opportunity)\b/i },
   // A temporary position and a stated contract term are both fixed-term work.
   { re: /\b(temporary)\s+(?:position|role|employment)\b/i, map: () => 'fixed-term' },
   { re: /\b\d{1,2}\s*[-–]?\s*(?:week|month)\s+contract\s+term\b/i, map: () => 'fixed-term' },
@@ -133,8 +135,8 @@ const WORKLOAD_PATTERNS = [
 // a contract term, a placement or a programme. Months and weeks stay in their
 // own unit; no conversion is ever applied.
 const DURATION_PATTERNS = [
-  { re: /\b(\d{1,2})\s*[-–]?\s*(weeks?|months?)\s+(?:fixed[\s-]?term\s+)?(?:contract|term|placement|programme|program|internship)\b/i },
-  { re: /\b(?:fixed[\s-]?term|contract|placement|programme|program|internship)\s*(?:of|for)?\s*(\d{1,2})\s*[-–]?\s*(weeks?|months?)\b/i },
+  { re: /\b(\d{1,2})\s*[-–]?\s*(weeks?|months?)\s+(?:fixed[\s-]?term\s+)?(?:contract|term|placement|programme|program|internship|opportunity)\b/i },
+  { re: /\b(?:fixed[\s-]?term|contract|placement|programme|program|internship|opportunity)\s*(?:of|for)?\s*(\d{1,2})\s*[-–]?\s*(weeks?|months?)\b/i },
 ];
 const SALARY_PLACEHOLDER = /^(?:tbd|to be decided|na|n\/a|negotiable|competitive|undisclosed)$/i;
 
@@ -189,10 +191,13 @@ export function observeText(record, text, response) {
   const dates = name => {
     const pattern = name === 'postedAt'
       ? /(?:Posted on|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+20\d{2})/i
-      : /(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+20\d{2})/i;
+      : new RegExp(`(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\\s*:?\\s*(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`
+        + `|Applications? close(?:s)?(?:\\s*at\\s*[\\d.]{1,5}\\s*(?:am|pm)?)?\\s+on\\s+(?:[A-Za-z]+,?\\s+)?(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`, 'i');
     const m = body.match(pattern);
     if (m) {
-      const date = new Date(m[1].replace(/(\d)(st|nd|rd|th)/, '$1') + ' UTC');
+      const raw = m[1] ?? m[2];
+      if (!raw) return;
+      const date = new Date(raw.replace(/(\d)(st|nd|rd|th)/, '$1') + ' UTC');
       if (!isNaN(date)) {
         const value = date.toISOString().slice(0, 10);
         if (name === 'postedAt') setPostedAt(fields, value, response, m[0], 'advertised-date');
@@ -237,22 +242,60 @@ export function poolKind(record, body) {
   return null;
 }
 
+// The body of a posting, read from whichever structure the platform returned.
+// A posting object is never stringified: a platform that ships its body as a
+// structured document is read as that document.
+function apiBody(job) {
+  const parts = [];
+  const content = job.content;
+  if (typeof content === 'string') parts.push(content);
+  else if (content && typeof content === 'object' && !Array.isArray(content)) {
+    // SmartRecruiters: content.sections.<name>.text
+    if (content.sections && typeof content.sections === 'object') {
+      for (const section of Object.values(content.sections)) {
+        const text = typeof section === 'string' ? section : section?.text ?? '';
+        if (text) parts.push(text);
+      }
+    } else if (typeof content.text === 'string') parts.push(content.text);
+  }
+  if (!parts.length) {
+    if (job.descriptionHtml) parts.push(job.descriptionHtml);
+    else if (job.descriptionPlain) parts.push(job.descriptionPlain);
+    else if (job.description) parts.push(job.description);
+    const lists = (job.lists ?? []).map(x => `${x.text}: ${x.content}`).join('\n');
+    if (lists) parts.push(lists);
+    const adSections = Object.values(job.jobAd?.sections ?? {}).map(x => x?.text ?? '').join('\n');
+    if (adSections) parts.push(adSections);
+  }
+  return textOf(parts.join('\n'));
+}
+
 export function fromApi(record, job, response, company) {
   const f = record.fields, p = record.provider;
   const apiId = job.id ?? record.ids.apiPosting ?? null;
   if (apiId != null) record.ids.apiPosting = String(apiId);
   record.ids.platformJob = job.internal_job_id == null ? record.ids.platformJob : String(job.internal_job_id);
   if (!record.ids.requisition && (job.requisition_id ?? job.refNumber)) record.ids.requisition = job.requisition_id ?? job.refNumber;
-  f.title = fact(job.title ?? job.name ?? job.text, response);
+  // SmartRecruiters names the posting jobTitle and the place jobAdLocation.
+  f.title = fact(job.title ?? job.jobTitle ?? job.name ?? job.text, response);
   f.employer = fact(job.company_name ?? job.company?.name ?? company, response);
   if (f.employer.source && !job.company_name && !job.company?.name) f.employer.source.kind = 'registered-official-board';
-  const parts = Object.values(job.jobAd?.sections ?? {}).map(x => x?.text ?? '').join('\n');
-  const text = textOf(job.content ?? job.descriptionHtml ?? job.descriptionPlain ?? [job.description, ...(job.lists ?? []).map(x => `${x.text}: ${x.content}`), parts].filter(Boolean).join('\n'));
-  const location = typeof job.location === 'object' ? job.location?.name ?? [job.location?.city, job.location?.region, job.location?.country].filter(Boolean).join(', ') : job.location ?? job.categories?.location;
+  const text = apiBody(job);
+  const location = job.jobAdLocation
+    ?? (typeof job.location === 'object' ? job.location?.name ?? [job.location?.city, job.location?.region, job.location?.country].filter(Boolean).join(', ') : job.location)
+    ?? job.categories?.location;
   f.location = fact(location, response);
-  const posted = p === 'greenhouse' ? job.first_published : p === 'ashby' ? job.publishedAt : p === 'smartrecruiters' ? job.releasedDate : job.createdAt;
-  setPostedAt(f, typeof posted === 'number' ? new Date(posted).toISOString() : posted, response, posted,
-    p === 'greenhouse' ? 'first-published' : p === 'lever' ? 'platform-created' : 'last-published');
+  // postedDate is the date the posting was advertised; releasedDate only says
+  // when the posting was last touched, so it never stands in for one.
+  const posted = p === 'greenhouse' ? job.first_published
+    : p === 'ashby' ? job.publishedAt
+    : p === 'smartrecruiters' ? (job.postedDate ?? job.releasedDate)
+    : job.createdAt;
+  const postedSemantics = p === 'greenhouse' ? 'first-published'
+    : p === 'lever' ? 'platform-created'
+    : p === 'smartrecruiters' ? (job.postedDate ? 'advertised-date' : 'last-published')
+    : 'last-published';
+  setPostedAt(f, typeof posted === 'number' ? new Date(posted).toISOString() : posted, response, posted, postedSemantics);
   if (job.updated_at) f.updatedAt = fact(job.updated_at, response, job.updated_at, 'updated');
   if (job.application_deadline && !f.closesAt?.value) f.closesAt = fact(job.application_deadline, response, job.application_deadline, 'deadline');
   const employment = job.employmentType ?? job.categories?.commitment ?? job.typeOfEmployment?.label;
@@ -356,6 +399,27 @@ export function emailRoute(text, body, response) {
   return null;
 }
 
+// Where the posting says the job is. A place the posting names is read even
+// when it is not a New Zealand city: a posting that names Woonsocket, Rhode
+// Island has stated a location, and leaving that unread turns a known
+// conflict into an unknown. The place phrase is the employer's own wording.
+function locationCandidate($, text, body) {
+  const carriers = [];
+  const embedded = String(body ?? '').match(/"job_post_location"\s*:\s*"([^"]{2,80})"/);
+  if (embedded) carriers.push({ value: embedded[1], quote: embedded[0].slice(0, 200) });
+  const og = clean($('meta[property="og:description"]').first().attr('content'));
+  if (og) carriers.push({ value: og, quote: og.slice(0, 200) });
+  const element = clean($('[class*="location"],[data-testid="job-location"],.job-location').first().text());
+  if (element) carriers.push({ value: element, quote: element.slice(0, 200) });
+  const prose = text.match(/\b(?:based in|located in|located at|on-site in|onsite in|office in|offices in|hybrid in|remote in|working in|residing in)\s+([^.;]{2,60})/i);
+  if (prose) carriers.push({ value: prose[1], quote: clean(prose[0]).slice(0, 200) });
+  for (const carrier of carriers) {
+    const place = placeFragment(carrier.value);
+    if (place) return { value: place, quote: carrier.quote };
+  }
+  return null;
+}
+
 export function fromHtml(record, response) {
   const $ = load(response.body), f = record.fields;
   const main = $('main').length ? $('main').clone() : $('body').clone();
@@ -390,9 +454,8 @@ export function fromHtml(record, response) {
   if (!f.employer?.value && record.authority === 'registered-official' && record.lead.employer) f.employer = fact(record.lead.employer, response, record.lead.employer);
   observeText(record, text, response);
   if (!f.location?.value) {
-    const city = text.match(/\b(?:Auckland|Wellington|Christchurch|Hamilton|Tauranga|Dunedin|Napier|Queenstown|Rotorua|Palmerston\s+North|New\s+Plymouth|Whangarei|Invercargill|Hastings|Whanganui)\b/i);
-    const meta = clean($('[class*="location"],[data-testid="job-location"],.job-location').first().text());
-    if (meta && city) f.location = fact(meta, response);
+    const candidate = locationCandidate($, text, response.body);
+    if (candidate) f.location = fact(candidate.value, response, candidate.quote);
   }
   const req = text.match(/(?:Requisition(?: ID)?|Job (?:reference|number)|Position Number|Reference|REF)\s*:?\s*([\w-]{4,30})/i);
   if (req && !record.ids.requisition) record.ids.requisition = req[1];
@@ -414,6 +477,37 @@ export function fromHtml(record, response) {
 export function closureScope(text) {
   return /(?:employer(?:'s)?|our|this)\s+(?:careers?\s+)?(?:page|posting|site)\b[^.]{0,80}\b(?:role|position|job)\b[^.]{0,40}\b(?:closed|no longer|not available)\b/i.test(text)
     ? 'employer-posting' : 'advertisement';
+}
+
+// A closure statement only closes the vacancy when the page that made it is
+// the employer's own posting, bound to this advertisement. A mirror or
+// aggregator that says "this job has expired" proves that advertisement
+// expired, and nothing about the employer's role.
+//
+// A record read from an ATS tenant is the employer's own posting. A record
+// read from a plain web page is only the employer's posting once this run has
+// verified that employer's careers page and linked it to this record; until
+// then the page is a mirror or an aggregator, and its expiry notice speaks
+// for that advertisement alone.
+export function closureBoundToAdvertisement(record, url) {
+  if (!url) return false;
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  const employerPosting = record.provider !== 'html' || record.authority === 'registered-official';
+  const known = new Set((record.aliases ?? []).map(canonicalLocal).filter(Boolean));
+  if (known.has(canonicalLocal(url))) return employerPosting;
+  const tenant = tenantOf(url);
+  const id = record.ids?.advertisement;
+  if (tenant && tenant.account) {
+    const ownProvider = record.provider && record.provider !== 'html';
+    const ownAccount = String(record.account ?? '').toLowerCase();
+    if (ownProvider && ownProvider !== tenant.provider) return false;
+    if (ownAccount && tenant.account.toLowerCase() !== ownAccount) return false;
+    if (id && !u.pathname.split('/').includes(String(id))) return false;
+    return true;
+  }
+  if (id && u.pathname.split('/').includes(String(id))) return employerPosting;
+  return false;
 }
 
 export function formProof(record, response) {

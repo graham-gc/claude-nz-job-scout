@@ -3,48 +3,215 @@ import { join, resolve, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { load } from './html.mjs';
-import { hash, put, rootAt, runId, runPath, locked } from './store.mjs';
+import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
 import { criteria, contextHash, hardChecks } from './criteria.mjs';
 import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean } from './evidence.mjs';
 import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
+import { siteKey } from './site.mjs';
 
-export async function start(project, input, resumePath) {
+// The ceiling belongs to the request, not to a run. Opening a new run does not
+// reset anything: the remaining budget of the request travels with it, and a
+// request that has already spent its ceiling cannot buy more by restarting.
+// The request is named by an id the caller carries, so "the same resume and
+// the same criteria" is never mistaken for "the same user request": the
+// continuation runs of one request share its budget, and a request the user
+// starts afresh carries its own id and its own budget.
+export const MAX_RUNS_PER_REQUEST = 3;
+
+const STAGES = ['discovery', 'detail', 'application'];
+const STAGE_LABEL = { discovery: '发现', detail: '详情', application: '申请' };
+const GROUPS = ['boards', 'linkedin', 'search'];
+
+export function zeroCounters() {
+  const groups = () => ({ boards: 0, linkedin: 0, search: 0 });
+  return { used: { discovery: 0, detail: 0, application: 0 }, groups: groups(),
+    stageGroups: { discovery: groups(), detail: groups(), application: groups() },
+    robotsUsed: 0, stageRobots: { discovery: groups(), detail: groups(), application: groups() }, sourceUsed: {} };
+}
+export function budgetDelta(current, baseline) {
+  const delta = { used: {}, groups: {}, stageGroups: {}, robotsUsed: 0, stageRobots: {}, sourceUsed: {} };
+  // The group counters describe the whole request, not one stage: they are
+  // read once, outside the stage loop.
+  for (const group of GROUPS) delta.groups[group] = Math.max(0, (current?.groups?.[group] ?? 0) - (baseline?.groups?.[group] ?? 0));
+  for (const stage of STAGES) {
+    delta.used[stage] = Math.max(0, (current?.used?.[stage] ?? 0) - (baseline?.used?.[stage] ?? 0));
+    delta.stageGroups[stage] = {}; delta.stageRobots[stage] = {};
+    for (const group of GROUPS) {
+      delta.stageGroups[stage][group] = Math.max(0, (current?.stageGroups?.[stage]?.[group] ?? 0) - (baseline?.stageGroups?.[stage]?.[group] ?? 0));
+      delta.stageRobots[stage][group] = Math.max(0, (current?.stageRobots?.[stage]?.[group] ?? 0) - (baseline?.stageRobots?.[stage]?.[group] ?? 0));
+    }
+  }
+  delta.robotsUsed = Math.max(0, (current?.robotsUsed ?? 0) - (baseline?.robotsUsed ?? 0));
+  for (const [source, used] of Object.entries(current?.sourceUsed ?? {})) {
+    const base = baseline?.sourceUsed?.[source] ?? { requests: 0, items: 0, details: 0, stages: {} };
+    const entry = { requests: Math.max(0, (used.requests ?? 0) - (base.requests ?? 0)),
+      items: Math.max(0, (used.items ?? 0) - (base.items ?? 0)),
+      details: Math.max(0, (used.details ?? 0) - (base.details ?? 0)), stages: {} };
+    for (const [stage, s] of Object.entries(used.stages ?? {})) {
+      entry.stages[stage] = { requests: Math.max(0, (s.requests ?? 0) - (base.stages?.[stage]?.requests ?? 0)) };
+    }
+    delta.sourceUsed[source] = entry;
+  }
+  return delta;
+}
+export function addBudget(target, delta) {
+  // The group counters are totals, not per-stage sums: adding them inside the
+  // stage loop would count the same discovery once for every stage.
+  for (const group of GROUPS) target.groups[group] = (target.groups[group] ?? 0) + (delta.groups?.[group] ?? 0);
+  for (const stage of STAGES) {
+    target.used[stage] = (target.used[stage] ?? 0) + (delta.used?.[stage] ?? 0);
+    for (const group of GROUPS) {
+      target.stageGroups[stage][group] = (target.stageGroups[stage][group] ?? 0) + (delta.stageGroups?.[stage]?.[group] ?? 0);
+      target.stageRobots[stage][group] = (target.stageRobots[stage][group] ?? 0) + (delta.stageRobots?.[stage]?.[group] ?? 0);
+    }
+  }
+  target.robotsUsed = (target.robotsUsed ?? 0) + (delta.robotsUsed ?? 0);
+  for (const [source, entry] of Object.entries(delta.sourceUsed ?? {})) {
+    const used = target.sourceUsed[source] ?? { requests: 0, items: 0, details: 0, stages: {} };
+    const stages = { ...(used.stages ?? {}) };
+    for (const [stage, s] of Object.entries(entry.stages ?? {})) {
+      stages[stage] = { requests: (stages[stage]?.requests ?? 0) + (s.requests ?? 0) };
+    }
+    target.sourceUsed[source] = { ...used, requests: used.requests + entry.requests, items: used.items + entry.items, details: used.details + entry.details, stages };
+  }
+  return target;
+}
+
+// A run is finished when it produced its report, when it was closed by hand,
+// or when its own wall-clock cap has passed. A finished run takes no more
+// calls, so it cannot spend behind the back of the next run of the request.
+export function runFinished(state, now = Date.now()) {
+  if (state?.reported) return true;
+  if (state?.request?.finishedAt) return true;
+  const deadline = state?.wallDeadline ?? state?.deadline;
+  return typeof deadline === 'number' && now >= deadline;
+}
+// Closing a run by hand: an abandoned run that will never report is ended, so
+// the request can continue.
+export function endRun(state, now = new Date().toISOString()) {
+  state.request = state.request ?? {};
+  state.request.finishedAt = now;
+  return { run: state.id, ended: true, finishedAt: now };
+}
+
+export async function start(project, input, resumePath, options = {}) {
   const root = await rootAt(project), config = criteria(input), path = resolve(resumePath);
   let resume;
   if (extname(path).toLowerCase() === '.pdf') resume = (await promisify(execFile)('pdftotext', ['-layout', path, '-'], { timeout: 10000, maxBuffer: 2_000_000 })).stdout;
   else if (['.txt', '.md'].includes(extname(path).toLowerCase())) resume = await readFile(path, 'utf8');
   else throw new Error('Resume input supports PDF (pdftotext required), TXT or Markdown');
   if (resume.trim().length < 100) throw new Error('Resume text missing/too short; supply a readable resume, not invented profile data');
-  const id = runId(), now = new Date().toISOString(), folder = runPath(root, id);
   const sources = sourcesFor(config);
-  const state = {
-    schema: 1, id, startedAt: now,
-    // The request window is measured in network time, so model thinking cannot consume it.
-    // The wall-clock deadline is only a hard safety cap for the whole run.
-    deadline: Date.now() + 60 * 60000, networkBudgetMs: 15 * 60000, networkSpentMs: 0, wallDeadline: Date.now() + 60 * 60000,
-    config, resumeHash: hash(resume), context: contextHash(config, hash(resume)), resumePath: path,
-    budget: {
-      limits: { discovery: 20, detail: 20, application: 10 },
-      used: { discovery: 0, detail: 0, application: 0 },
-      groupLimits: { boards: 12, linkedin: 3, search: 5 },
-      groups: { boards: 0, linkedin: 0, search: 0 },
-      // Per-stage ledgers: the report prints the numbers of the stage it
-      // describes, so a detail read can never be shown as discovery spend.
-      stageGroups: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
-      // robots.txt reads are counted inside their source group and against
-      // this ceiling of their own.
-      robotsLimit: 6, robotsUsed: 0,
-      stageRobots: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
-      sourceLimits: { discoveryRequests: 4, detailRequests: 8, applicationRequests: 4, items: 200, details: 6 },
-      sourceUsed: {}
-    },
-    attempts: [], sources: sources.map(s => ({ id: s.id, url: s.url, name: s.name, status: 'not-started', reviewed: 0 })),
-    records: [], cache: {}, robots: {}, blockedSources: {}, tickets: [], associations: [], warnings: []
-  };
-  await put(root, join(folder, 'resume.txt'), resume);
-  await put(root, join(folder, 'run.json'), state);
-  return { run: id, root, context: state.context, resumeText: join(folder, 'resume.txt'), limits: state.budget.limits, deadline: new Date(state.deadline).toISOString() };
+  const context = contextHash(config, hash(resume));
+  const declared = typeof input.requestId === 'string' ? input.requestId.trim() : '';
+  // A request is named, not inferred. The caller carries the id: the
+  // continuation runs of one user request share it and share its budget, and a
+  // request the user starts afresh carries a new id and its own budget. The
+  // same resume with the same criteria is not what makes two requests one.
+  // A request may only have one live run, and two commands may not start a
+  // run of the same request at the same moment. Both are decided under the
+  // start lock, against the states as they are on disk at that moment, so a
+  // second run can neither slip in between the check and the creation nor
+  // live beside the first one.
+  return startLock(root, async () => {
+    const prior = await runStates(root);
+    const known = [...new Set(prior.map(s => s.request?.requestId).filter(Boolean))];
+    const current = known.length ? known[known.length - 1] : null;
+    let requestId, requestKind;
+    if (options.newRequest) { requestId = newRequestId(); requestKind = 'new'; }
+    else if (declared && known.includes(declared)) { requestId = declared; requestKind = 'continued'; }
+    else if (declared) { requestId = declared; requestKind = 'new'; }
+    else if (current) { requestId = current; requestKind = 'continued'; }
+    else { requestId = newRequestId(); requestKind = 'new'; }
+    const id = runId(), now = new Date().toISOString(), folder = runPath(root, id);
+    const requestRuns = prior.filter(s => s.request?.requestId === requestId);
+    const live = requestRuns.filter(s => !runFinished(s));
+    if (live.length) {
+      throw new Error(`本次请求（requestId ${requestId}）已有 ${live.length} 个活跃运行（${live.map(r => r.id).join('、')}）；同一请求同时只能有一个活跃运行，否则两轮各自都能花满同一份预算。请先结束它：产出报告即结束该运行，或用 end --run RUN_ID 关闭未完成的运行，之后才能续跑。若这是用户明确发起的新一次扫描，请用 start --new-request。`);
+    }
+    // Everything this request has already spent, and every run it has already
+    // opened, is counted before a new run is allowed to exist.
+    const spent = zeroCounters();
+    for (const s of requestRuns) addBudget(spent, s.request?.own ?? budgetDelta(s.budget ?? {}, zeroCounters()));
+    // Runs from before requests were named belong to no request: their spend is
+    // shown in the ledger, but it is not carried into any request.
+    const legacyRuns = prior.filter(s => !s.request?.requestId);
+    const legacy = zeroCounters();
+    for (const s of legacyRuns) addBudget(legacy, budgetDelta(s.budget ?? {}, zeroCounters()));
+    const limits = { discovery: 20, detail: 20, application: 10 };
+    const usedUp = STAGES.filter(stage => (spent.used[stage] ?? 0) >= limits[stage]);
+    if (requestRuns.length >= MAX_RUNS_PER_REQUEST || usedUp.length) {
+      const reason = requestRuns.length >= MAX_RUNS_PER_REQUEST
+        ? `本次请求（requestId ${requestId}）已开启 ${requestRuns.length} 轮，上限为 ${MAX_RUNS_PER_REQUEST} 轮`
+        : `本次请求（requestId ${requestId}）的${usedUp.map(stage => STAGE_LABEL[stage] ?? stage).join('、')}预算已用尽（${usedUp.map(stage => `${spent.used[stage]}/${limits[stage]}`).join('，')}）`;
+      throw new Error(`${reason}。同一请求内的续跑共用同一份预算，重开 run 不会把它重置。若这是用户明确发起的新一次扫描，请用 start --new-request 开启新请求：新请求的预算独立，且不结转上一次请求的用量。`);
+    }
+    const state = {
+      schema: 1, id, startedAt: now,
+      // The request window is measured in network time, so model thinking cannot consume it.
+      // The wall-clock deadline is only a hard safety cap for the whole run.
+      deadline: Date.now() + 60 * 60000, networkBudgetMs: 15 * 60000, networkSpentMs: 0, wallDeadline: Date.now() + 60 * 60000,
+      config, resumeHash: hash(resume), context, resumePath: path,
+      // The request ledger: what this request has spent so far, what this run
+      // starts from, and which run of the request this is.
+      request: { requestId, kind: requestKind, context, maxRuns: MAX_RUNS_PER_REQUEST,
+        runIndex: requestRuns.length + 1,
+        startedAt: requestRuns.length ? requestRuns[0].startedAt : now,
+        baselineBudget: JSON.parse(JSON.stringify(spent)), own: zeroCounters(), finishedAt: null },
+      budget: {
+        limits,
+        used: { discovery: 0, detail: 0, application: 0 },
+        groupLimits: { boards: 12, linkedin: 3, search: 5 },
+        groups: { boards: 0, linkedin: 0, search: 0 },
+        // Per-stage ledgers: the report prints the numbers of the stage it
+        // describes, so a detail read can never be shown as discovery spend.
+        stageGroups: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
+        // robots.txt reads are counted inside their source group and against
+        // this ceiling of their own.
+        robotsLimit: 6, robotsUsed: 0,
+        stageRobots: { discovery: { boards: 0, linkedin: 0, search: 0 }, detail: { boards: 0, linkedin: 0, search: 0 }, application: { boards: 0, linkedin: 0, search: 0 } },
+        sourceLimits: { discoveryRequests: 4, detailRequests: 8, applicationRequests: 4, items: 200, details: 6 },
+        sourceUsed: {}
+      },
+      attempts: [], sources: sources.map(s => ({ id: s.id, url: s.url, name: s.name, status: 'not-started', reviewed: 0 })),
+      records: [], cache: {}, robots: {}, blockedSources: {}, tickets: [], associations: [], warnings: []
+    };
+    // The budget of this run starts from what the request has already spent.
+    addBudget(state.budget, spent);
+    state.request.baselineBudget = JSON.parse(JSON.stringify(spent));
+    await put(root, join(folder, 'resume.txt'), resume);
+    await put(root, join(folder, 'run.json'), state);
+    return { run: id, root, context: state.context, requestId, resumeText: join(folder, 'resume.txt'), limits: state.budget.limits,
+      request: { requestId, kind: requestKind, runIndex: state.request.runIndex, maxRuns: state.request.maxRuns,
+        startedAt: state.request.startedAt,
+        spentBeforeThisRun: { discovery: spent.used.discovery, detail: spent.used.detail, application: spent.used.application },
+        legacyRuns: legacyRuns.length,
+        legacySpend: { discovery: legacy.used.discovery, detail: legacy.used.detail, application: legacy.used.application } },
+      deadline: new Date(state.deadline).toISOString() };
+  });
+}
+
+// The request ledger of a project: every request that was opened, how many
+// runs it holds and what it spent. Runs from before requests were named are
+// listed apart, because their spend belongs to no request.
+export function requestLedger(states) {
+  const requests = new Map();
+  let legacy = { runs: 0, spent: zeroCounters() };
+  for (const s of states ?? []) {
+    const id = s.request?.requestId;
+    if (!id) {
+      legacy.runs++;
+      addBudget(legacy.spent, budgetDelta(s.budget ?? {}, zeroCounters()));
+      continue;
+    }
+    const entry = requests.get(id) ?? { requestId: id, runs: 0, spent: zeroCounters(), startedAt: s.startedAt ?? null };
+    entry.runs++;
+    entry.startedAt = entry.startedAt && entry.startedAt <= s.startedAt ? entry.startedAt : (s.startedAt ?? entry.startedAt);
+    addBudget(entry.spent, s.request?.own ?? budgetDelta(s.budget ?? {}, zeroCounters()));
+    requests.set(id, entry);
+  }
+  return { requests: [...requests.values()], legacy };
 }
 export function relevant(record, config) {
   // Retrieval hint only; never a suitability score or a recommendation decision.
@@ -240,7 +407,12 @@ export async function details(state, reader, ids) {
 export async function associate(state, reader, recordId, officialUrl) {
   const r = state.records.find(x => x.recordId === recordId);
   if (!r) throw new Error('Unknown record ID');
-  const official = publicUrl(officialUrl), response = await reader.get(official.href, 'discovery', 'association');
+  // Each employer's careers page is its own source. A shared 'association'
+  // key would let one employer's refusal block every other employer's
+  // verification and would spend a single allowance for unrelated sites.
+  const official = publicUrl(officialUrl);
+  const site = siteKey(official.href);
+  const response = await reader.get(official.href, 'discovery', site);
   if (response.status !== 200) throw new Error('Official careers association could not be read');
   const shape = recognised(r.canonicalUrl), $ = load(response.body), found = [];
   $('a[href]').each((_, el) => {
@@ -525,9 +697,16 @@ export function excluded(record, exclusions) {
 }
 export async function inRun(project, id, action, request) {
   const root = await rootAt(project);
-  return locked(root, id, (state, folder) => {
+  return locked(root, id, async (state, folder) => {
     if (state.reported) throw new Error('This run already produced its immutable report; start a new incremental run');
-    return action(state, new Reader(root, folder, state, request), root, folder);
+    // A finished run takes no further calls: it cannot spend behind the back
+    // of the next run of the same request.
+    if (state.request?.finishedAt) throw new Error('This run has been ended; start a new run of the request');
+    const result = await action(state, new Reader(root, folder, state, request), root, folder);
+    // What this run spent on its own, apart from what the request had already
+    // spent before it started. The next run of the same request counts this.
+    if (state.request?.baselineBudget) state.request.own = budgetDelta(state.budget, state.request.baselineBudget);
+    return result;
   });
 }
 export { idKeys, SOURCES };

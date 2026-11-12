@@ -1,9 +1,9 @@
 import { join } from 'node:path';
 import { lstat } from 'node:fs/promises';
-import { readJson, put, reports, hash } from './store.mjs';
+import { readJson, put, reports, hash, runStates } from './store.mjs';
 import { nzDate, classify, hardChecks } from './criteria.mjs';
 import { idKeys } from './evidence.mjs';
-import { excluded, validateJudgments, verifyApplication, applicationPlan } from './engine.mjs';
+import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger } from './engine.mjs';
 
 const esc = text => String(text ?? '').replace(/[\[\]<>*_`|]/g, x => `\\${x}`).replace(/\s+/g, ' ').trim();
 // Values are shown in words, never as raw JSON.
@@ -14,6 +14,15 @@ const fmtValue = value => {
   return String(value);
 };
 const link = (title, url) => `[${esc(title)}](<${new URL(url).href}>)`;
+// The request ledger in words: every request of the project, how many runs it
+// holds and what it spent. A request that opens a fresh budget is visible
+// here, so a reset cannot pass unnoticed.
+function requestLedgerText(ledger) {
+  if (!ledger) return '（未记录）';
+  const parts = (ledger.requests ?? []).map(r => `requestId ${esc(r.requestId)}（${r.runs} 轮，发现 ${r.spent?.used?.discovery ?? 0}／详情 ${r.spent?.used?.detail ?? 0}／申请 ${r.spent?.used?.application ?? 0}，起始 ${esc(r.startedAt ?? '未记录')}）`);
+  if (ledger.legacy?.runs) parts.push(`早期无请求标识的运行（${ledger.legacy.runs} 轮，发现 ${ledger.legacy.spent?.used?.discovery ?? 0}／详情 ${ledger.legacy.spent?.used?.detail ?? 0}／申请 ${ledger.legacy.spent?.used?.application ?? 0}）不结转给任何请求`);
+  return parts.length ? parts.join('；') : '本项目尚未开启过请求';
+}
 const value = (r, name) => r.fields[name]?.value ?? '未披露／未读到';
 const material = item => hash({ ids: item.record.ids, fields: Object.fromEntries(Object.entries(item.record.fields).map(([k, v]) => [k, v.value])),
   application: { status: item.record.application?.status, kind: item.record.application?.kind, url: item.record.application?.url, email: item.record.application?.email }, category: item.category, fit: item.judgment?.fit });
@@ -153,7 +162,7 @@ export function render(report) {
     lines.push('');
   }
   lines.push('## 诊断（未推荐，不代表不合适）', '');
-  const diagnostics = items.filter(i => ['excluded', 'closed', 'decided', 'identity-anomaly', 'unassessed'].includes(i.category));
+  const diagnostics = items.filter(i => ['excluded', 'closed', 'decided', 'identity-anomaly', 'unassessed', 'mirror-expired'].includes(i.category));
   const shown = diagnostics.slice(0, 15), diagnosticOverflow = diagnostics.slice(15);
   for (const item of shown) {
     const r = record(item.recordId);
@@ -187,10 +196,16 @@ export function render(report) {
     const r = stageRobots[stage] ?? { boards: 0, linkedin: 0, search: 0 };
     return `${label} ${budget.used[stage] ?? 0}/${limits[stage] ?? 0}（boards ${g.boards ?? 0}，其中 robots.txt ${r.boards ?? 0} 次；linkedin ${g.linkedin ?? 0}，其中 robots.txt ${r.linkedin ?? 0} 次；search ${g.search ?? 0}，其中 robots.txt ${r.search ?? 0} 次）`;
   };
+  const request = state.request ?? null;
   lines.push(`- WebSearch：${state.tickets.length ? state.tickets.map(t => `ticket ${t.id}: ${t.status}${t.error ? ` (${esc(t.error)})` : ''}`).join('；') : 'not-started'}。搜索工具的结果由模型报回；不可观察上游内部请求。`,
-    `- 可观察调用／预留票据（本次运行账目）：${stageLine('discovery', '发现')}；${stageLine('detail', '详情')}；${stageLine('application', '申请')}。robots.txt 读取合计 ${budget.robotsUsed ?? 0}/${budget.robotsLimit ?? 6} 次；跳转和 robots 请求均已计入上列数字。`,
-    `- 网络时间用量：${Math.round((state.networkSpentMs ?? 0) / 1000)} 秒／${Math.round((state.networkBudgetMs ?? 0) / 1000)} 秒；模型思考时间不计入。`,
-    `- ${esc(report.stopReason)}；本轮未进行登录态读取、自动投递、简历上传或邮件发送。`);
+    `- 可观察调用／预留票据（${request ? '本次请求累计账目，含本轮' : '本次运行账目'}）：${stageLine('discovery', '发现')}；${stageLine('detail', '详情')}；${stageLine('application', '申请')}。robots.txt 读取合计 ${budget.robotsUsed ?? 0}/${budget.robotsLimit ?? 6} 次；跳转和 robots 请求均已计入上列数字。`);
+  if (request) {
+    const own = request.own?.used ?? request.own ?? {};
+    lines.push(`- 本次请求（requestId ${esc(request.requestId ?? '')}，${request.kind === 'new' ? '本次开启的新请求' : '本次请求的续跑'}）：同一请求内的所有轮次共用同一份可观察调用预算（发现 ${limits.discovery ?? 20}／详情 ${limits.detail ?? 20}／申请 ${limits.application ?? 10}），本轮为该请求的第 ${request.runIndex}/${request.maxRuns} 轮，重开 run 不会把预算重置。同一请求同时只有一个活跃运行：产出报告即结束该运行，未完成的运行用 end --run RUN_ID 关闭，之后才能续跑。用户明确发起的新一次扫描用 start --new-request 开启新请求：新请求的预算独立，不结转上一次请求的用量。本轮自身用掉：发现 ${own.discovery ?? 0}、详情 ${own.detail ?? 0}、申请 ${own.application ?? 0}。`,
+      `- 本项目请求账目：${requestLedgerText(report.ledger)}`,
+      `- 网络时间用量：${Math.round((state.networkSpentMs ?? 0) / 1000)} 秒／${Math.round((state.networkBudgetMs ?? 0) / 1000)} 秒；模型思考时间不计入。`,
+      `- ${esc(report.stopReason)}；本轮未进行登录态读取、自动投递、简历上传或邮件发送。`);
+  }
   for (const w of state.warnings) lines.push(`- ${esc(w)}`);
   lines.push('', `<!-- nz-job-scout-v1 run=${state.id} context=${state.context} -->`, '');
   return lines.join('\n');
@@ -235,10 +250,11 @@ export async function produce(root, state, reader, input, now = new Date().toISO
   const budgetShort = Object.keys(state.budget.used).filter(k => state.budget.used[k] >= state.budget.limits[k]);
   const stopReason = budgetShort.length ? `阶段预算已到（${budgetShort.map(k => `${k} ${state.budget.used[k]}/${state.budget.limits[k]}`).join('，')}），未挤占后段预算` : '按当前已取得证据结束；未完成来源和未评估条目已披露';
   const { records: _drop, ...stateWithoutRecords } = state;
+  const ledger = requestLedger(await runStates(root));
   const report = { format: 'nz-job-scout-report-v1', generatedAt: now, date: nzDate(now), context: state.context,
     coverage: coverage(state), state: stateWithoutRecords, records, items: items2, newItems: visible, overflow, withdrawals, pendingHistory,
     unchanged: promoted.filter(i => previous.some(p => p.material === i.material)).length,
-    stopReason };
+    ledger, stopReason };
   const base = `nz-jobs-${report.date}`;
   const occupied = await lstat(join(root, 'output', `${base}.md`)).catch(e => { if (e.code !== 'ENOENT') throw e; });
   const name = occupied ? `${base}-${state.id.slice(0, 8)}` : base;

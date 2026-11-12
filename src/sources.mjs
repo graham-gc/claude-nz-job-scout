@@ -2,6 +2,7 @@ import { load } from './html.mjs';
 import { hash } from './store.mjs';
 import { publicUrl, countDetail } from './net.mjs';
 import { newRecord, fromApi, fromHtml, canonical, canonicalLocal, clean } from './evidence.mjs';
+import { siteKey, tenantOf } from './site.mjs';
 
 export const SOURCES = [
   { id: 'contact', name: 'Contact Energy', provider: 'smartrecruiters', account: 'ContactEnergy', url: 'https://api.smartrecruiters.com/v1/companies/ContactEnergy/postings?limit=100', officialUrl: 'https://contact.co.nz/About-Us/Careers', boardUrl: 'https://jobs.smartrecruiters.com/contactenergy' },
@@ -28,6 +29,8 @@ export function sourcesFor(config) {
   return [...list, ...entries.slice(0, 2)];
 }
 
+const API_HOSTS = new Set(['boards-api.greenhouse.io', 'api.smartrecruiters.com', 'api.lever.co']);
+
 export function recognised(url) {
   const u = new URL(url), p = u.pathname.split('/').filter(Boolean);
   if (u.hostname === 'job-boards.greenhouse.io' && p[0]) return { provider: 'greenhouse', account: p[0], ...(p[1] === 'jobs' && /^\d+$/.test(p[2]) ? { advertisement: p[2] } : {}) };
@@ -35,12 +38,19 @@ export function recognised(url) {
   if (u.hostname === 'jobs.smartrecruiters.com' && p[0]) return { provider: 'smartrecruiters', account: p[0], ...(/^\d+(?:-|$)/.test(p[1] ?? '') ? { advertisement: p[1].split('-')[0] } : {}) };
   if (u.hostname === 'jobs.ashbyhq.com' && p[0]) return { provider: 'ashby', account: p[0], ...(p[1] && !/^\d+$/.test(p[1]) ? { advertisement: p[1] } : {}) };
   if (u.hostname === 'careers.asbgroup.co.nz') return { provider: 'asb', account: 'asb' };
+  // An ATS inventory endpoint belongs to one tenant, and is attributed to it.
+  if (API_HOSTS.has(u.hostname)) {
+    const tenant = tenantOf(url);
+    if (tenant?.account) return { provider: tenant.provider, account: tenant.account };
+  }
   return { provider: 'html', account: '' };
 }
 export function resolveLead(url, sources = SOURCES) {
   const shape = recognised(url);
   const registered = sources.find(s => s.provider === shape.provider && s.account.toLowerCase() === shape.account.toLowerCase());
-  return { ...shape, url: canonical(url), employer: registered?.name, sourceKey: registered?.id ?? 'web-search', authority: registered ? 'registered-official' : 'discovery-only' };
+  // A discovered lead is charged to the site it lives on, not to a shared
+  // search key: one employer's site is one source, and its budget is its own.
+  return { ...shape, url: canonical(url), employer: registered?.name, sourceKey: registered?.id ?? siteKey(url), authority: registered ? 'registered-official' : 'discovery-only' };
 }
 
 export function parseListing(source, response, run) {

@@ -2,16 +2,16 @@
 import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { readJson } from '../src/store.mjs';
-import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult } from '../src/engine.mjs';
+import { dirname, join, isAbsolute } from 'node:path';
+import { readJson, put, rootAt } from '../src/store.mjs';
+import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult, endRun } from '../src/engine.mjs';
 import { produce } from '../src/report.mjs';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const help = `NZ Job Scout v1 (development)
 All commands run in the target project, not the plugin cache. JSON output only.
   version
-  start --input request.json --resume /absolute/resume.pdf
+  start --input request.json --resume /absolute/resume.pdf [--new-request]
   discover --run RUN_ID
   index --run RUN_ID [--offset 100]
   search-ticket --run RUN_ID
@@ -21,6 +21,7 @@ All commands run in the target project, not the plugin cache. JSON output only.
   associate --run RUN_ID --record RECORD_ID --official HTTPS_CAREERS_URL
   inventory --run RUN_ID --record RECORD_ID --official HTTPS_CAREERS_URL
   report --run RUN_ID --judgments judgments.json
+  end --run RUN_ID
 Optional --project /absolute/project on every command. No cleanup, login, shell-fetch,
 plugin installation, application submission or source-editing subcommands.`;
 try {
@@ -28,7 +29,7 @@ try {
     project: { type: 'string' }, input: { type: 'string' }, resume: { type: 'string' }, run: { type: 'string' },
     ticket: { type: 'string' }, url: { type: 'string', multiple: true }, error: { type: 'string' },
     record: { type: 'string', multiple: true }, official: { type: 'string' }, judgments: { type: 'string' },
-    offset: { type: 'string' }, help: { type: 'boolean' },
+    offset: { type: 'string' }, help: { type: 'boolean' }, 'new-request': { type: 'boolean' },
   } });
   const command = positionals[0], project = a.project ?? process.cwd();
   if (a.help || !command) { process.stdout.write(help + '\n'); process.exit(0); }
@@ -47,7 +48,22 @@ try {
       consistent: Boolean(manifest?.version && pkg?.version && manifest.version === pkg.version),
     };
   }
-  else if (command === 'start') { required('input', 'resume'); result = await start(project, await readJson(a.input), a.resume); }
+  else if (command === 'start') {
+    required('input', 'resume');
+    const root = await rootAt(project);
+    // The path is resolved inside the project, because the project's real path
+    // and the path the caller typed can differ through a symlink.
+    const inputPath = isAbsolute(a.input) ? a.input : join(root, a.input);
+    const input = await readJson(inputPath);
+    result = await start(project, input, a.resume, { newRequest: a['new-request'] === true });
+    // The request id is written back into the request file, so that the
+    // continuation runs of this request keep the same id and the same budget
+    // without the caller having to carry it.
+    if (result.requestId && input.requestId !== result.requestId) {
+      await put(root, inputPath, { ...input, requestId: result.requestId }, { replace: true });
+      result.requestIdWrittenTo = inputPath;
+    }
+  }
   else {
     required('run');
     result = await inRun(project, a.run, async (state, reader, root) => {
@@ -74,6 +90,9 @@ try {
         case 'associate': required('record', 'official'); return associate(state, reader, a.record[0], a.official);
         case 'inventory': required('record', 'official'); return inventory(state, reader, a.record[0], a.official);
         case 'report': required('judgments'); return produce(root, state, reader, await readJson(a.judgments));
+        // Closing an abandoned run by hand: it will never report, but it must
+        // not keep the request from continuing.
+        case 'end': return endRun(state);
         default: throw new Error(`Unknown command ${command}; use --help`);
       }
     });

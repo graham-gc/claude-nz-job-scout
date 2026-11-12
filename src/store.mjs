@@ -5,6 +5,9 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const hash = (value) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 export const runId = () => randomUUID();
+// A request id names one user request. Continuation runs of that request carry
+// the same id and share its budget; a new user request carries a new id.
+export const newRequestId = () => randomUUID();
 export function validRun(id) { if (!/^[a-f0-9-]{36}$/.test(id ?? '')) throw new Error('Invalid run ID; use the ID returned by start'); return id; }
 export async function rootAt(path = process.cwd()) { return realpath(resolve(path)); }
 
@@ -81,6 +84,47 @@ export async function locked(root, id, action) {
     try { return await action(state, folder); }
     finally { await put(root, file, state, { replace: true }); }
   } finally { await handle.close(); await unlink(lock); }
+}
+// Starting a run is serialized per project. The request id may still be
+// undecided when a start begins — two commands that both see "no request yet"
+// would each mint one — so the lock is taken on the project, not on an id that
+// does not exist yet. Under it the check and the creation happen together, so
+// no second run of the same request can slip in between them.
+export async function startLock(root, action) {
+  const folder = join(root, '.nz-job-scout', 'requests');
+  await guard(root, folder);
+  await mkdir(folder, { recursive: true });
+  const lock = join(folder, 'start.lock');
+  await guard(root, lock);
+  let handle;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      handle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      break;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      if (attempt === 0 && await staleLock(lock)) { await unlink(lock).catch(() => {}); continue; }
+      throw new Error('A run is being started by another command; do not run start concurrently');
+    }
+  }
+  try { await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }) + '\n'); await handle.sync(); }
+  catch { /* the lock itself is the mutual exclusion; its payload is advisory */ }
+  finally { await handle.close(); }
+  try { return await action(); }
+  finally { await unlink(lock).catch(() => {}); }
+}
+// Every run this project has opened, newest last. The request ledger is read
+// from these files, so the ceiling of a request survives a restart.
+export async function runStates(root) {
+  const folder = join(root, '.nz-job-scout', 'runs');
+  const entries = await readdir(folder, { withFileTypes: true }).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
+  const states = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const state = await readJson(join(folder, entry.name, 'run.json'), null).catch(() => null);
+    if (state) states.push(state);
+  }
+  return states.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
 }
 export async function reports(root) {
   const folder = join(root, 'output');

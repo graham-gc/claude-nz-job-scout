@@ -1,12 +1,12 @@
 {
   "name": "nz-job-scout",
-  "version": "1.0.0-dev.2",
+  "version": "1.0.0-dev.3",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check bin/nz-job-scout.mjs && node --check src/addr.mjs && node --check src/criteria.mjs && node --check src/engine.mjs && node --check src/evidence.mjs && node --check src/html.mjs && node --check src/net.mjs && node --check src/report.mjs && node --check src/robots.mjs && node --check src/sources.mjs && node --check src/store.mjs"
+    "check": "node --check bin/nz-job-scout.mjs && node --check src/addr.mjs && node --check src/criteria.mjs && node --check src/engine.mjs && node --check src/evidence.mjs && node --check src/html.mjs && node --check src/net.mjs && node --check src/places.mjs && node --check src/report.mjs && node --check src/robots.mjs && node --check src/site.mjs && node --check src/sources.mjs && node --check src/store.mjs"
   },
   "dependencies": {}
 }

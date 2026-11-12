@@ -1,5 +1,7 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
+import { closureBoundToAdvertisement } from './evidence.mjs';
+import { foreignScope, isForeignPlace, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
 
 export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 const dayNumber = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
@@ -55,28 +57,25 @@ export function condition(record, c) {
   return verdict(name, pass ? 'satisfied' : 'conflict', `${v} ${c.op} ${JSON.stringify(c.value)}`);
 }
 
-const NZ_PLACES = ['auckland', 'wellington', 'christchurch', 'hamilton', 'tauranga', 'dunedin', 'napier', 'queenstown', 'rotorua',
-  'palmerston north', 'new plymouth', 'whangarei', 'invercargill', 'hastings', 'whanganui', 'taupo', 'te puke', 'tokoroa', 'gore',
-  'cambridge', 'motueka', 'feilding', 'levin', 'greymouth', 'wanaka', 'pukekohe', 'waiuku', 'orewa', 'masterton', 'lower hutt',
-  'upper hutt', 'petone', 'porirua', 'takapuna', 'paraparaumu', 'palmerston', 'kapiti', 'hawkes bay', 'bay of plenty', 'waikato',
-  'taranaki', 'wairarapa', 'nelson', 'marlborough', 'otago', 'southland', 'west coast', 'canterbury', 'northland', 'gisborne',
-  'new zealand', 'nz', 'aotearoa'];
-const FOREIGN_PLACES = ['united states', 'united kingdom', 'england', 'scotland', 'wales', 'ireland', 'australia', 'canada',
-  'singapore', 'germany', 'india', 'china', 'japan', 'france', 'netherlands', 'philippines', 'south africa', 'brazil', 'mexico',
-  'italy', 'spain', 'poland', 'sweden', 'norway', 'denmark', 'switzerland', 'austria', 'belgium', 'argentina', 'indonesia',
-  'vietnam', 'thailand', 'malaysia', 'uae', 'united arab emirates', 'israel', 'turkey', 'greece', 'portugal', 'finland',
-  'new york', 'california', 'texas', 'colorado', 'florida', 'washington', 'massachusetts', 'illinois', 'ontario', 'quebec',
-  'british columbia', 'nsw', 'victoria', 'queensland', 'wa ', 'nsw '];
-const REMOTE_ONLY = /^\s*(?:remote|fully remote|work from home|wfh|anywhere|100% remote)\s*$/i;
-
+// A posting that names a place outside the requested country has stated its
+// location, so it is a conflict rather than an unknown. A posting that names
+// only "Remote" has not stated where it hires, so it stays unknown. A remote
+// posting that names its own scope ("Remote (US)", "Remote, Latin America")
+// has stated where it hires too.
 export function locationVerdict(record, config) {
   const location = (record.fields.location?.value ?? '').trim();
   const arrangement = record.fields.workArrangement?.value;
   if (!location) return verdict('Location', 'unknown', 'Job location not stated/read');
-  if (FOREIGN_PLACES.some(p => p.trim().length > 2 && location.toLowerCase().includes(p))) return verdict('Location', 'conflict', `Location outside New Zealand: ${location}`);
+  if (isForeignPlace(location)) return verdict('Location', 'conflict', `Location outside New Zealand: ${location}`);
   if (REMOTE_ONLY.test(location)) return verdict('Location', 'unknown', `Remote only; the posting does not state whether the employer hires in ${config.location.country}`);
-  const nz = NZ_PLACES.some(p => new RegExp(`\\b${p.trim()}\\b`, 'i').test(location));
-  if (!nz) return verdict('Location', 'unknown', `Region not parsed from "${location}"; treated as unknown, not as a match`);
+  const scope = remoteScope(location);
+  if (scope) {
+    if (nzPlace(scope)) return verdict('Location', 'satisfied', `${location}; remote work covers ${scope}`);
+    const outside = foreignScope(scope);
+    if (outside) return verdict('Location', 'conflict', `Remote work is limited to ${scope}; it does not cover ${config.location.country}`);
+    return verdict('Location', 'unknown', `Remote scope "${scope}" is not a recognised hiring region; treated as unknown, not as a match`);
+  }
+  if (!nzPlace(location)) return verdict('Location', 'unknown', `Region not parsed from "${location}"; treated as unknown, not as a match`);
   const cities = config.location.onsiteCities ?? [];
   if (!cities.length) return verdict('Location', 'satisfied', `In ${config.location.country} and no specific city was requested: ${location}`);
   const inCity = cities.some(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}\\b`, 'i').test(location));
@@ -115,7 +114,15 @@ export function hardChecks(record, config, now) {
 
 export function classify(record, config, judgment, now) {
   const checks = hardChecks(record, config, now);
-  if (record.closure) return { category: 'closed', checks, reason: `${record.closure.scope} explicitly closed` };
+  // A closure closes the vacancy only when the employer said so, on the
+  // employer's own posting. A mirror that says "this job has expired" proves
+  // that mirror advertisement expired and says nothing about the employer's
+  // role, so it stays out of the recommendation area without being called closed.
+  if (record.closure) {
+    const bound = record.closure.scope === 'employer-posting' || closureBoundToAdvertisement(record, record.closure.source?.url);
+    if (bound) return { category: 'closed', checks, reason: `${record.closure.scope} explicitly closed` };
+    return { category: 'mirror-expired', checks, reason: '只有镜像／聚合广告的过期说明：这证明该镜像广告已失效，不证明雇主岗位已关闭，雇主岗位状态仍未知' };
+  }
   // An identity anomaly is neither a recommendation nor a high-value lead.
   if (record.anomalies?.length || record.identityConflict) return { category: 'identity-anomaly', checks, reason: 'Identity could not be resolved across sources; not recommended' };
   if (record.opportunityKind?.value === 'talent-pool') {
