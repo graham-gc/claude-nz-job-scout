@@ -159,3 +159,20 @@ output/
 
 # Offline before/after comparison artefacts (replay tooling + recorded outputs)
 .compare/
+
+# Runtime-only distribution. New top-level paths stay local by default.
+# Keep the licence and Git policy alongside the executable plugin package.
+/*
+!/.gitignore
+!/LICENSE
+!/package.json
+!/package-lock.json
+!/.claude-plugin/
+!/bin/
+!/src/
+!/skills/
+
+# Development-only files are retained locally, never added to the package.
+/tests/
+/docs/
+/README.md
