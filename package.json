@@ -1,6 +1,6 @@
 {
   "name": "nz-job-scout",
-  "version": "1.0.0-dev.5",
+  "version": "1.0.0-dev.6",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },

@@ -8,9 +8,9 @@ import { excluded, validateJudgments, verifyApplication, applicationPlan, reques
 const esc = text => String(text ?? '').replace(/[\[\]<>*_`|]/g, x => `\\${x}`).replace(/\s+/g, ' ').trim();
 // Values are shown in words, never as raw JSON.
 const fmtValue = value => {
-  if (value == null) return '未披露';
-  if (Array.isArray(value)) return value.map(fmtValue).join('、');
-  if (typeof value === 'object') return Object.entries(value).map(([k, v]) => `${k}=${fmtValue(v)}`).join('，');
+  if (value == null) return 'Not stated';
+  if (Array.isArray(value)) return value.map(fmtValue).join(', ');
+  if (typeof value === 'object') return Object.entries(value).map(([k, v]) => `${k}=${fmtValue(v)}`).join(', ');
   return String(value);
 };
 const link = (title, url) => `[${esc(title)}](<${new URL(url).href}>)`;
@@ -18,12 +18,12 @@ const link = (title, url) => `[${esc(title)}](<${new URL(url).href}>)`;
 // holds and what it spent. A request that opens a fresh budget is visible
 // here, so a reset cannot pass unnoticed.
 function requestLedgerText(ledger) {
-  if (!ledger) return '（未记录）';
-  const parts = (ledger.requests ?? []).map(r => `requestId ${esc(r.requestId)}（${r.runs} 轮，发现 ${r.spent?.used?.discovery ?? 0}／详情 ${r.spent?.used?.detail ?? 0}／申请 ${r.spent?.used?.application ?? 0}，起始 ${esc(r.startedAt ?? '未记录')}）`);
-  if (ledger.legacy?.runs) parts.push(`早期无请求标识的运行（${ledger.legacy.runs} 轮，发现 ${ledger.legacy.spent?.used?.discovery ?? 0}／详情 ${ledger.legacy.spent?.used?.detail ?? 0}／申请 ${ledger.legacy.spent?.used?.application ?? 0}）不结转给任何请求`);
-  return parts.length ? parts.join('；') : '本项目尚未开启过请求';
+  if (!ledger) return '(not recorded)';
+  const parts = (ledger.requests ?? []).map(r => `requestId ${esc(r.requestId)} (${r.runs} runs; discovery ${r.spent?.used?.discovery ?? 0} / detail ${r.spent?.used?.detail ?? 0} / application ${r.spent?.used?.application ?? 0}; started ${esc(r.startedAt ?? 'not recorded')})`);
+  if (ledger.legacy?.runs) parts.push(`Legacy runs without request IDs (${ledger.legacy.runs} runs; discovery ${ledger.legacy.spent?.used?.discovery ?? 0} / detail ${ledger.legacy.spent?.used?.detail ?? 0} / application ${ledger.legacy.spent?.used?.application ?? 0}) are not charged to any request`);
+  return parts.length ? parts.join('; ') : 'No requests have been opened in this project';
 }
-const value = (r, name) => r.fields[name]?.value ?? '未披露／未读到';
+const value = (r, name) => r.fields[name]?.value ?? 'Not stated / not read';
 const material = item => hash({ ids: item.record.ids, fields: Object.fromEntries(Object.entries(item.record.fields).map(([k, v]) => [k, v.value])),
   application: { status: item.record.application?.status, kind: item.record.application?.kind, url: item.record.application?.url, email: item.record.application?.email }, category: item.category, fit: item.judgment?.fit });
 
@@ -47,66 +47,66 @@ export function readableCheck(check) {
         return detail.map(x => `${esc(x.name)}=${x.status}`).join(', ');
       }
       if (detail.every(Array.isArray)) {
-        return detail.map((group, i) => `方案${i + 1}[${group.map(x => `${esc(x.name)}=${x.status}`).join(', ')}]`).join('；');
+        return detail.map((group, i) => `Alternative ${i + 1}[${group.map(x => `${esc(x.name)}=${x.status}`).join(', ')}]`).join('; ');
       }
-      return detail.map(x => esc(fmtValue(x))).join('；');
+      return detail.map(x => esc(fmtValue(x))).join('; ');
     }
     if (detail && typeof detail === 'object') return esc(fmtValue(detail));
     return esc(fmtValue(detail));
   };
-  const label = status === 'conflict' ? '冲突' : status === 'satisfied' ? '满足' : '未知';
-  return `${name}（${label}）：${render(check.detail)}`;
+  const label = status === 'conflict' ? 'conflict' : status === 'satisfied' ? 'satisfied' : 'unknown';
+  return `${name} (${label}): ${render(check.detail)}`;
 }
 function obstacles(item) {
   return item.checks.filter(c => c.status !== 'satisfied').map(readableCheck);
 }
 function unreadReason(record) {
   const bits = [];
-  if (record.readState !== 'read') bits.push(`原帖读取状态：${record.readState}`);
-  if (record.detailError) bits.push(`读取问题：${record.detailError}`);
-  if (record.gaps?.length) bits.push(`仍缺字段：${record.gaps.join('、')}`);
-  if (record.authority !== 'registered-official') bits.push('雇主官网关联未核验');
-  if (record.closure) bits.push(`关闭证据（${record.closure.scope}）：${record.closure.quote ?? ''}`);
-  return bits.join('；');
+  if (record.readState !== 'read') bits.push(`Posting read state: ${record.readState}`);
+  if (record.detailError) bits.push(`Read issue: ${record.detailError}`);
+  if (record.gaps?.length) bits.push(`Missing fields: ${record.gaps.join(', ')}`);
+  if (record.authority !== 'registered-official') bits.push('Employer website association not verified');
+  if (record.closure) bits.push(`Closure evidence (${record.closure.scope}): ${record.closure.quote ?? ''}`);
+  return bits.join('; ');
 }
-// Every record is left in its own state. "未评估" alone says nothing about
+// Every record is left in its own state. "Unassessed" alone says nothing about
 // why a record was not assessed, so each record carries the status this run
 // actually reached: read or not, from which page, and what is still unknown.
 export function leadStatus(record) {
   const r = record ?? {};
   if (r.readState === 'read') {
-    if (r.authority === 'registered-official') return '已读雇主原帖：官网关联已核验';
-    if (r.closure) return '已读镜像页：镜像广告已过期，雇主原帖状态未知';
-    return '已读来源页：未经雇主官网核验，雇主原帖未核验';
+    if (r.authority === 'registered-official') return 'Employer posting read: website association verified';
+    if (r.closure) return 'Mirror read: mirror advertisement expired; employer vacancy status unknown';
+    return 'Source page read: employer website association and original posting not verified';
   }
-  if (r.readState === 'closed-stated') return '已读页面：页面声明该广告已关闭';
-  if (r.readState === 'partial') return `部分读到：${r.detailError ?? '字段不全'}`;
-  if (r.readState === 'unreadable') return `已尝试但无法核验：${r.detailError ?? '页面不可核验'}`;
-  if (r.readState === 'not-read') return r.detailError ? `未读到：${r.detailError}` : '未尝试读取';
-  return `状态：${r.readState ?? '未知'}`;
+  if (r.readState === 'closed-stated') return 'Page read: the page states that this advertisement is closed';
+  if (r.readState === 'partial') return `Partially read: ${r.detailError ?? 'incomplete fields'}`;
+  if (r.readState === 'unreadable') return `Read attempted but not verifiable: ${r.detailError ?? 'page could not be verified'}`;
+  if (r.readState === 'not-read') return r.detailError ? `Not read: ${r.detailError}` : 'Read not attempted';
+  return `State: ${r.readState ?? 'unknown'}`;
 }
 // A record without a title is still identifiable: its own address is shown.
 export function leadLabel(record) {
   const r = record ?? {};
   const title = r.fields.title?.value ?? r.lead?.title;
   if (title) return title;
-  try { const u = new URL(r.canonicalUrl); return `${u.hostname}${u.pathname}`; } catch { return String(r.canonicalUrl ?? '未知页面'); }
+  try { const u = new URL(r.canonicalUrl); return `${u.hostname}${u.pathname}`; } catch { return String(r.canonicalUrl ?? 'Unknown page'); }
 }
 
 // --- preferences -------------------------------------------------------------
 // Preferences are executable rules over recorded facts. Their basis is stated.
 const PREFERENCE_RULES = [
-  { re: /\bremote\b|远程/i, check: r => r.fields.workArrangement?.value === 'remote' || /\bremote\b/i.test(r.fields.location?.value ?? ''), basis: r => `workArrangement=${r.fields.workArrangement?.value ?? '未读到'}；location=${r.fields.location?.value ?? '未读到'}` },
-  { re: /\bhybrid\b|混合/i, check: r => r.fields.workArrangement?.value === 'hybrid', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? '未读到'}` },
-  { re: /\bon[\s-]?site\b|现场|坐班/i, check: r => r.fields.workArrangement?.value === 'on-site', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? '未读到'}` },
-  { re: /\bpermanent\b|长期|永久/i, check: r => r.fields.contractType?.value === 'permanent', basis: r => `contractType=${r.fields.contractType?.value ?? '未读到'}` },
-  { re: /\bfixed[\s-]?term\b|固定期限/i, check: r => r.fields.contractType?.value === 'fixed-term', basis: r => `contractType=${r.fields.contractType?.value ?? '未读到'}` },
-  { re: /\bfull[\s-]?time\b|全职/i, check: r => r.fields.workload?.value === 'full-time', basis: r => `workload=${r.fields.workload?.value ?? '未读到'}` },
-  { re: /\bpart[\s-]?time\b|兼职/i, check: r => r.fields.workload?.value === 'part-time', basis: r => `workload=${r.fields.workload?.value ?? '未读到'}` },
-  { re: /\bintern(ship)?\b|实习/i, check: r => /intern/i.test(`${r.fields.title?.value ?? ''} ${r.lead.title ?? ''}`), basis: r => `title=${r.fields.title?.value ?? r.lead.title ?? '未读到'}` },
-  { re: /\bsalary\b|薪酬|薪资/i, check: r => !!r.fields.salary?.value, basis: r => `salary=${r.fields.salary?.value ?? '未读到'}` },
-  { re: /\bnot volunteer\b|非志愿|paid role/i, check: r => r.fields.engagement?.value && r.fields.engagement.value !== 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? '未读到'}` },
-  { re: /\bvolunteer\b|志愿/i, check: r => r.fields.engagement?.value === 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? '未读到'}` }
+  { re: /\bremote\b/i, check: r => r.fields.workArrangement?.value === 'remote' || /\bremote\b/i.test(r.fields.location?.value ?? ''), basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}; location=${r.fields.location?.value ?? 'not read'}` },
+  { re: /\bhybrid\b/i, check: r => r.fields.workArrangement?.value === 'hybrid', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}` },
+  { re: /\bon[\s-]?site\b/i, check: r => r.fields.workArrangement?.value === 'on-site', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}` },
+  { re: /\bpermanent\b/i, check: r => r.fields.contractType?.value === 'permanent', basis: r => `contractType=${r.fields.contractType?.value ?? 'not read'}` },
+  { re: /\bfixed[\s-]?term\b/i, check: r => r.fields.contractType?.value === 'fixed-term', basis: r => `contractType=${r.fields.contractType?.value ?? 'not read'}` },
+  { re: /\bfull[\s-]?time\b/i, check: r => r.fields.workload?.value === 'full-time', basis: r => `workload=${r.fields.workload?.value ?? 'not read'}` },
+  { re: /\bpart[\s-]?time\b/i, check: r => r.fields.workload?.value === 'part-time', basis: r => `workload=${r.fields.workload?.value ?? 'not read'}` },
+  { re: /\bintern(ship)?\b/i, check: r => /intern/i.test(`${r.fields.title?.value ?? ''} ${r.lead.title ?? ''}`), basis: r => `title=${r.fields.title?.value ?? r.lead.title ?? 'not read'}` },
+  { re: /\bsalary\b/i, check: r => !!r.fields.salary?.value, basis: r => `salary=${r.fields.salary?.value ?? 'not read'}` },
+  { re: /\bnot volunteer\b|paid role/i, check: r => r.fields.engagement?.value && r.fields.engagement.value !== 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? 'not read'}` },
+  { re: /\bvolunteer\b/i, check: r => r.fields.engagement?.value === 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? 'not read'}` }
 ];
 const CITY_RULE = { re: /\b(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|queenstown|palmerston north|new plymouth|whangarei|invercargill)\b/i };
 export function preferenceVerdicts(record, preferences = []) {
@@ -119,9 +119,9 @@ export function preferenceVerdicts(record, preferences = []) {
     const city = text.match(CITY_RULE.re);
     if (city) {
       const location = record.fields.location?.value ?? '';
-      return { text, status: new RegExp(city[0], 'i').test(location) ? 'satisfied' : 'conflict', basis: `location=${location || '未读到'}` };
+      return { text, status: new RegExp(city[0], 'i').test(location) ? 'satisfied' : 'conflict', basis: `location=${location || 'not read'}` };
     }
-    return { text, status: 'unknown', basis: '没有可执行的判定规则；本条偏好不参与排序' };
+    return { text, status: 'unknown', basis: 'No executable preference rule; this preference does not affect ranking' };
   });
 }
 export function preferenceScore(record, preferences = []) {
@@ -131,107 +131,107 @@ export function preferenceScore(record, preferences = []) {
 
 function jobLines(item, preferences = []) {
   const { record: r, judgment: j, checks } = item;
-  const title = value(r, 'title') === '未披露／未读到' ? r.lead.title || '未确认职位' : value(r, 'title');
-  const employer = r.fields.employer?.value ?? r.lead.employer ?? '未确认雇主';
-  const lines = [`### ${esc(title)} — ${esc(employer)}`, '', `- 地点／方式：${esc(value(r, 'location'))} · ${esc(value(r, 'workArrangement'))}`,
-    `- 工作性质：${esc(value(r, 'engagement'))} · ${esc(value(r, 'contractType'))} · ${esc(value(r, 'workload'))} · ${esc(value(r, 'hoursPerWeek'))} 小时／周`,
-    `- 期限：${esc(r.fields.duration?.value ? `${r.fields.duration.value.amount} ${r.fields.duration.value.unit}` : '未披露／未读到')}（保留原始单位，不做换算）`,
-    `- 发布：${esc(value(r, 'postedAt'))}${r.fields.postedAt?.semantics ? `（${esc(r.fields.postedAt.semantics)}）` : ''}；截止：${esc(value(r, 'closesAt'))}`,
-    `- 薪酬：${esc(value(r, 'salary'))}；薪酬状态：${esc(r.fields.payStatus?.value ?? 'unknown')}${r.fields.engagement?.value === 'volunteer' ? ' · **Volunteer**' : ''}`,
-    `- 匹配判断：${esc(j?.fit ?? '未评估')}。${(j?.reasons ?? [item.reason]).map(esc).join('；')}`];
-  if (r.relativePublication?.text) lines.push(`- 相对发布时间（原文保留）：${esc(r.relativePublication.text)}；来源 ${esc(r.relativePublication.source?.url ?? '未读到')}，观察于 ${esc(r.relativePublication.source?.observedAt ?? '未读到')}；未折算为具体首发日期。`);
+  const title = value(r, 'title') === 'Not stated / not read' ? r.lead.title || 'Unconfirmed role' : value(r, 'title');
+  const employer = r.fields.employer?.value ?? r.lead.employer ?? 'Unconfirmed employer';
+  const lines = [`### ${esc(title)} — ${esc(employer)}`, '', `- Location / arrangement: ${esc(value(r, 'location'))} · ${esc(value(r, 'workArrangement'))}`,
+    `- Work type: ${esc(value(r, 'engagement'))} · ${esc(value(r, 'contractType'))} · ${esc(value(r, 'workload'))} · ${esc(value(r, 'hoursPerWeek'))} hours/week`,
+    `- Duration: ${esc(r.fields.duration?.value ? `${r.fields.duration.value.amount} ${r.fields.duration.value.unit}` : 'Not stated / not read')} (original unit; no conversion)`,
+    `- Published: ${esc(value(r, 'postedAt'))}${r.fields.postedAt?.semantics ? ` (${esc(r.fields.postedAt.semantics)})` : ''}; closes: ${esc(value(r, 'closesAt'))}`,
+    `- Salary: ${esc(value(r, 'salary'))}; pay status: ${esc(r.fields.payStatus?.value ?? 'unknown')}${r.fields.engagement?.value === 'volunteer' ? ' · **Volunteer**' : ''}`,
+    `- Match assessment: ${esc(j?.fit ?? 'unassessed')}. ${(j?.reasons ?? [item.reason]).map(esc).join('; ')}`];
+  if (r.relativePublication?.text) lines.push(`- Relative publication wording (verbatim): ${esc(r.relativePublication.text)}; source ${esc(r.relativePublication.source?.url ?? 'not read')}, observed ${esc(r.relativePublication.source?.observedAt ?? 'not read')}; not converted into an exact first-publication date.`);
   if (r.application?.status === 'verified') {
-    if (r.application.kind === 'email-in-posting') lines.push(`- 申请方式：发邮件至 **${esc(r.application.email)}**。原帖投递说明：${esc(r.application.instruction)}`);
-    else if (r.application.kind === 'job-specific-external-ats') lines.push(`- **${link('申请入口（外部 ATS）', r.application.url)}**（已读到本岗位专属申请页，未提交）`);
-    else lines.push(`- **${link('直接申请', r.application.url)}**（已读到本岗位专属表单，未提交）`);
-  } else lines.push(`- 申请方式未核验（${esc(r.application?.status ?? 'not-checked')}）：${esc(r.application?.reason ?? '未检查')}。下方链接不是已验证申请入口。`);
-  lines.push(`- ${link('职位详情', r.canonicalUrl)}`);
+    if (r.application.kind === 'email-in-posting') lines.push(`- Apply by email to **${esc(r.application.email)}**. Instructions in the posting: ${esc(r.application.instruction)}`);
+    else if (r.application.kind === 'job-specific-external-ats') lines.push(`- **${link('Apply (external ATS)', r.application.url)}** (job-specific application page read; nothing submitted)`);
+    else lines.push(`- **${link('Apply directly', r.application.url)}** (job-specific form read; nothing submitted)`);
+  } else lines.push(`- Application route not verified (${esc(r.application?.status ?? 'not-checked')}): ${esc(r.application?.reason ?? 'Not checked')}. The link below is not a verified application route.`);
+  lines.push(`- ${link('Vacancy details', r.canonicalUrl)}`);
   const obs = obstacles(item);
-  if (obs.length) lines.push(`- 主要障碍：${obs.join('；')}`);
-  if (r.conflicts?.length) lines.push(`- 合并冲突：${r.conflicts.slice(0, 3).map(c => `${esc(c.field)} 保留 ${esc(fmtValue(c.kept))}，另见 ${esc(fmtValue(c.discarded))}`).join('；')}`);
-  if (r.closure) lines.push(`- 关闭证据（${esc(r.closure.scope)}，观察于 ${esc(r.closure.observedAt ?? '未读到')}）：${esc(r.closure.quote ?? '')}`);
-  if (r.opportunityKind?.value === 'talent-pool') lines.push('- 这是人才池，不保证有空缺或面试，不作为现有职位统计。');
+  if (obs.length) lines.push(`- Main obstacles: ${obs.join('; ')}`);
+  if (r.conflicts?.length) lines.push(`- Merge conflicts: ${r.conflicts.slice(0, 3).map(c => `${esc(c.field)} kept ${esc(fmtValue(c.kept))}; also observed ${esc(fmtValue(c.discarded))}`).join('; ')}`);
+  if (r.closure) lines.push(`- Closure evidence (${esc(r.closure.scope)}, observed ${esc(r.closure.observedAt ?? 'not read')}): ${esc(r.closure.quote ?? '')}`);
+  if (r.opportunityKind?.value === 'talent-pool') lines.push('- This is a talent pool, not a confirmed vacancy or interview opportunity; it is not counted as an open role.');
   if (preferences.length) {
     const { verdicts } = preferenceScore(r, preferences);
-    lines.push(`- 偏好依据：${verdicts.map(v => `${esc(v.text)}→${v.status === 'satisfied' ? '满足' : v.status === 'conflict' ? '不满足' : '未知'}（${esc(v.basis)}）`).join('；')}`);
+    lines.push(`- Preference evidence: ${verdicts.map(v => `${esc(v.text)} -> ${v.status === 'satisfied' ? 'satisfied' : v.status === 'conflict' ? 'conflict' : 'unknown'} (${esc(v.basis)})`).join('; ')}`);
   }
-  const evidence = Object.entries(r.fields).filter(([k, f]) => k !== 'duties' && f.source).map(([name, f]) => `${esc(name)} → ${link('来源', f.source.url)}`);
-  lines.push(`- 记录：\`${r.recordId}\`；字段证据：${evidence.join('；')}`, '');
+  const evidence = Object.entries(r.fields).filter(([k, f]) => k !== 'duties' && f.source).map(([name, f]) => `${esc(name)} -> ${link('source', f.source.url)}`);
+  lines.push(`- Record: \`${r.recordId}\`; field evidence: ${evidence.join('; ')}`, '');
   return lines;
 }
 // A recruitment channel is disclosed with its own evidence. It never looks
 // like a job: no application route is claimed for it.
 function channelLines(item) {
   const { record: r } = item;
-  const title = value(r, 'title') === '未披露／未读到' ? r.lead.title || '未确认渠道' : value(r, 'title');
-  const employer = r.fields.employer?.value ?? r.lead.employer ?? '未确认雇主';
-  const lines = [`- ${esc(title)} — ${esc(employer)}：${esc(item.reason ?? '')}`];
+  const title = value(r, 'title') === 'Not stated / not read' ? r.lead.title || 'Unconfirmed channel' : value(r, 'title');
+  const employer = r.fields.employer?.value ?? r.lead.employer ?? 'Unconfirmed employer';
+  const lines = [`- ${esc(title)} — ${esc(employer)}: ${esc(item.reason ?? '')}`];
   const obs = obstacles(item);
-  if (obs.length) lines.push(`  - 障碍：${obs.join('；')}`);
+  if (obs.length) lines.push(`  - Obstacles: ${obs.join('; ')}`);
   const unread = unreadReason(r);
-  if (unread) lines.push(`  - 未读原因：${esc(unread)}`);
-  lines.push(`  - 页面：${link('渠道页面', r.canonicalUrl)}`, `  - 记录：\`${r.recordId}\``);
+  if (unread) lines.push(`  - Read limitations: ${esc(unread)}`);
+  lines.push(`  - Page: ${link('Channel page', r.canonicalUrl)}`, `  - Record: \`${r.recordId}\``);
   return lines;
 }
 export function render(report) {
   const { state, items, newItems, overflow = [], withdrawals, pendingHistory } = report;
   const record = id => report.records[id];
   const preferences = state.config.preferences ?? [];
-  const lines = ['# New Zealand Job Scout', '', `生成：${report.generatedAt} · Pacific/Auckland 日期 ${report.date}`, '',
-    `简历已读取；职位族：${state.config.roleFamilies.map(esc).join('、')}；首发窗口：${state.config.postingDays} 天。`,
-    `覆盖度：**${report.coverage}**（仅指本轮计划，不代表整个市场）。`, ''];
+  const lines = ['# New Zealand Job Scout', '', `Generated: ${report.generatedAt} · Pacific/Auckland date ${report.date}`, '',
+    `Resume read; role families: ${state.config.roleFamilies.map(esc).join(', ')}; first-publication window: ${state.config.postingDays} days.`,
+    `Coverage: **${report.coverage}** (this run's plan only, not the whole market).`, ''];
   // Disclosures are sentences: each one is printed in full.
-  for (const text of (state.config.disclosures ?? [])) lines.push(`- 条件披露：${esc(text)}`);
+  for (const text of (state.config.disclosures ?? [])) lines.push(`- Criteria disclosure: ${esc(text)}`);
   if ((state.config.disclosures ?? []).length) lines.push('');
-  lines.push('## 建议（已核验）', '');
-  for (const [category, name] of [['ready', '可以投'], ['check', '值得确认'], ['unresolved', '高价值线索：尚未读到可信完整原帖'], ['pool', '人才池：不是确定空缺']]) {
+  lines.push('## Recommendations', '');
+  for (const [category, name] of [['ready', 'Ready to apply'], ['check', 'Worth confirming'], ['unresolved', 'High-value leads: authoritative posting not fully verified'], ['pool', 'Talent pools: not confirmed vacancies']]) {
     lines.push(`### ${name}`, '');
     const section = newItems.filter(i => i.category === category);
     if (section.length) for (const item of section) lines.push(...jobLines({ ...item, record: record(item.recordId) }, preferences));
-    else lines.push(category === 'ready' ? '在可访问的来源中没有新增的、核验通过且有可用申请方式的岗位。' : '本轮无新增。', '');
+    else lines.push(category === 'ready' ? 'No new verified roles with usable application routes were found in accessible sources.' : 'No new items in this run.', '');
   }
   const channels = items.filter(i => i.category === 'channel');
   if (channels.length) {
-    lines.push('## 渠道待核查（面向雇主的招聘渠道，不是岗位推荐）', '',
-      '以下条目是面向雇主方的招聘活动或平台页面。页面本身不是可投的空缺，候选人侧的报名入口本轮未核验；它们只作为可跟进的渠道披露，不进入推荐，也不计入岗位统计。', '');
+    lines.push('## Channels to check (employer-facing, not job recommendations)', '',
+      'These recruitment events or platform pages address employers, not applicants. They are not confirmed vacancies and no candidate entry point was verified in this run. They are disclosed as channels to check, not recommendations, and are not counted as jobs.', '');
     for (const item of channels) lines.push(...channelLines({ ...item, record: record(item.recordId) }));
     lines.push('');
   }
   if (overflow.length) {
-    lines.push('## 本轮其余记录（按 ID 索引，完整字段见同目录 JSON 侧车）', '');
+    lines.push('## Other records in this run (ID index; full fields in the JSON sidecar)', '');
     for (const item of overflow) {
       const r = record(item.recordId);
-      lines.push(`- \`${item.recordId}\` ${esc(r.fields.title?.value ?? r.lead.title)} — ${esc(r.fields.employer?.value ?? r.lead.employer)}：${esc(item.reason ?? item.category)}`);
+      lines.push(`- \`${item.recordId}\` ${esc(r.fields.title?.value ?? r.lead.title)} — ${esc(r.fields.employer?.value ?? r.lead.employer)}: ${esc(item.reason ?? item.category)}`);
     }
     lines.push('');
   }
-  lines.push('## 诊断（未推荐，不代表不合适）', '');
+  lines.push('## Diagnostics (not recommended; not necessarily unsuitable)', '');
   const diagnostics = items.filter(i => ['excluded', 'closed', 'decided', 'identity-anomaly', 'unassessed', 'mirror-expired'].includes(i.category));
   const shown = diagnostics.slice(0, 15), diagnosticOverflow = diagnostics.slice(15);
   for (const item of shown) {
     const r = record(item.recordId);
     const employer = r.fields.employer?.value ?? r.lead.employer;
     const head = employer ? `${esc(leadLabel(r))} — ${esc(employer)}` : esc(leadLabel(r));
-    lines.push(`- ${head}：${esc(item.reason)}`);
-    lines.push(`  - 本轮状态：${esc(leadStatus(r))}`);
+    lines.push(`- ${head}: ${esc(item.reason)}`);
+    lines.push(`  - Current-run status: ${esc(leadStatus(r))}`);
     const obs = obstacles(item);
-    if (obs.length) lines.push(`  - 障碍：${obs.join('；')}`);
+    if (obs.length) lines.push(`  - Obstacles: ${obs.join('; ')}`);
     const unread = unreadReason(r);
-    if (unread && ['unassessed', 'identity-anomaly', 'mirror-expired', 'closed'].includes(item.category)) lines.push(`  - 未读原因：${esc(unread)}`);
-    lines.push(`  - 页面：${link('页面', r.canonicalUrl)}`, `  - 记录：\`${r.recordId}\``);
+    if (unread && ['unassessed', 'identity-anomaly', 'mirror-expired', 'closed'].includes(item.category)) lines.push(`  - Read limitations: ${esc(unread)}`);
+    lines.push(`  - Page: ${link('Page', r.canonicalUrl)}`, `  - Record: \`${r.recordId}\``);
   }
   if (diagnosticOverflow.length) {
-    lines.push('', `其余 ${diagnosticOverflow.length} 条诊断记录按 ID 索引（完整字段见同目录 JSON 侧车）：`, '');
+    lines.push('', `Remaining ${diagnosticOverflow.length} diagnostic records by ID (full fields in the JSON sidecar):`, '');
     for (const item of diagnosticOverflow) {
       const r = record(item.recordId);
       const employer = r.fields.employer?.value ?? r.lead.employer;
       const head = employer ? `${esc(leadLabel(r))} — ${esc(employer)}` : esc(leadLabel(r));
-      lines.push(`- \`${r.recordId}\` ${head}：${esc(item.reason)}｜本轮状态：${esc(leadStatus(r))}`);
+      lines.push(`- \`${r.recordId}\` ${head}: ${esc(item.reason)} | Current-run status: ${esc(leadStatus(r))}`);
     }
   }
-  lines.push('', '## 状态变化与去重', '');
-  for (const w of withdrawals) lines.push(`- 撤回此前${w.scope === 'advertisement' ? '广告' : '岗位'}：${esc(w.title)} — ${esc(w.employer)}。${esc(w.reason)}（不改写历史报告）`);
-  if (pendingHistory.length) lines.push(`- ${pendingHistory.length} 个历史推荐本轮未重新核实：不等于已关闭。`);
+  lines.push('', '## Status changes and deduplication', '');
+  for (const w of withdrawals) lines.push(`- Withdrawn previous ${w.scope === 'advertisement' ? 'advertisement' : 'role'}: ${esc(w.title)} — ${esc(w.employer)}. ${esc(w.reason)} (historical reports unchanged)`);
+  if (pendingHistory.length) lines.push(`- ${pendingHistory.length} historical recommendations were not reverified in this run; this does not mean they are closed.`);
   // Each record reports the state this run actually reached. A single
   // "unread" total hides whether a link was never tried, could not be
   // verified, or was read from a mirror whose original posting is unknown.
@@ -240,12 +240,12 @@ export function render(report) {
     const s = leadStatus(r);
     statusCounts.set(s, (statusCounts.get(s) ?? 0) + 1);
   }
-  lines.push(`- 已决定排除：${items.filter(i => i.category === 'decided').length}；无实质变化而不重复展示：${report.unchanged}。`,
-    `- 招聘渠道待核查：${channels.length} 条（面向雇主的渠道页面，不是岗位推荐，不计入岗位统计）。`,
-    `- 发现 ${Object.keys(report.records).length} 条记录；已评估 ${items.filter(i => i.judgment).length} 条；未评估 ${items.filter(i => i.category === 'unassessed').length} 条。未评估不等于不合适。`,
-    `- 各条记录的本轮状态：${[...statusCounts].map(([s, n]) => `${s} ${n} 条`).join('；')}。`,
-    '', '## 来源与预算', '');
-  for (const s of state.sources) lines.push(`- ${link(s.name, s.url)}：${s.status}；实际读到 ${s.reviewed} 条${s.advertisedTotal != null ? `／列表标称 ${s.advertisedTotal}` : ''}。${esc(s.reason ?? s.note ?? '')}`);
+  lines.push(`- Previously decided exclusions: ${items.filter(i => i.category === 'decided').length}; unchanged items not repeated: ${report.unchanged}.`,
+    `- Recruitment channels to check: ${channels.length} (employer-facing pages, not recommendations or jobs).`,
+    `- Discovered ${Object.keys(report.records).length} records; assessed ${items.filter(i => i.judgment).length}; unassessed ${items.filter(i => i.category === 'unassessed').length}. Unassessed does not mean unsuitable.`,
+    `- Current-run status tally: ${[...statusCounts].map(([s, n]) => `${s}: ${n}`).join('; ')}.`,
+    '', '## Sources and budget', '');
+  for (const s of state.sources) lines.push(`- ${link(s.name, s.url)}: ${s.status}; actually read ${s.reviewed}${s.advertisedTotal != null ? ` / advertised ${s.advertisedTotal}` : ''}. ${esc(s.reason ?? s.note ?? '')}`);
   const budget = state.budget, groups = budget.groups ?? {}, limits = budget.limits ?? {};
   const stageGroups = budget.stageGroups ?? {};
   const stageRobots = budget.stageRobots ?? {};
@@ -253,17 +253,17 @@ export function render(report) {
   const stageLine = (stage, label) => {
     const g = stageGroups[stage] ?? { boards: 0, linkedin: 0, search: 0 };
     const r = stageRobots[stage] ?? { boards: 0, linkedin: 0, search: 0 };
-    return `${label} ${budget.used[stage] ?? 0}/${limits[stage] ?? 0}（boards ${g.boards ?? 0}，其中 robots.txt ${r.boards ?? 0} 次；linkedin ${g.linkedin ?? 0}，其中 robots.txt ${r.linkedin ?? 0} 次；search ${g.search ?? 0}，其中 robots.txt ${r.search ?? 0} 次）`;
+    return `${label} ${budget.used[stage] ?? 0}/${limits[stage] ?? 0} (boards ${g.boards ?? 0}, including robots.txt ${r.boards ?? 0}; linkedin ${g.linkedin ?? 0}, including robots.txt ${r.linkedin ?? 0}; search ${g.search ?? 0}, including robots.txt ${r.search ?? 0})`;
   };
   const request = state.request ?? null;
-  lines.push(`- WebSearch：${state.tickets.length ? state.tickets.map(t => `ticket ${t.id}: ${t.status}${t.error ? ` (${esc(t.error)})` : ''}`).join('；') : 'not-started'}。搜索工具的结果由模型报回；不可观察上游内部请求。`,
-    `- 可观察调用／预留票据（${request ? '本次请求累计账目，含本轮' : '本次运行账目'}）：${stageLine('discovery', '发现')}；${stageLine('detail', '详情')}；${stageLine('application', '申请')}。robots.txt 读取合计 ${budget.robotsUsed ?? 0} 次；跳转和 robots 请求均已计入上列数字，没有单独的 robots 上限。`);
+  lines.push(`- WebSearch: ${state.tickets.length ? state.tickets.map(t => `ticket ${t.id}: ${t.status}${t.error ? ` (${esc(t.error)})` : ''}`).join('; ') : 'not-started'}. Search results are reported by the model; upstream internal requests are not observable.`,
+    `- Observable calls / reserved tickets (${request ? 'request totals including this run' : 'this run'}): ${stageLine('discovery', 'Discovery')}; ${stageLine('detail', 'Detail')}; ${stageLine('application', 'Application')}. Total robots.txt reads: ${budget.robotsUsed ?? 0}; redirects and robots reads are included above, with no separate robots ceiling.`);
   if (request) {
     const own = request.own?.used ?? request.own ?? {};
-    lines.push(`- 本次请求（requestId ${esc(request.requestId ?? '')}，${request.kind === 'new' ? '本次开启的新请求' : '本次请求的续跑'}）：同一请求内的所有轮次共用同一份可观察调用预算（发现 ${limits.discovery ?? 20}／详情 ${limits.detail ?? 20}／申请 ${limits.application ?? 10}），本轮为该请求的第 ${request.runIndex}/${request.maxRuns} 轮，重开 run 不会把预算重置。同一请求同时只有一个活跃运行：产出报告即结束该运行，未完成的运行用 end --run RUN_ID 关闭，之后才能续跑。用户明确发起的新一次扫描用 start --new-request 开启新请求：新请求的预算独立，不结转上一次请求的用量。本轮自身用掉：发现 ${own.discovery ?? 0}、详情 ${own.detail ?? 0}、申请 ${own.application ?? 0}。`,
-      `- 本项目请求账目：${requestLedgerText(report.ledger)}`,
-      `- 网络时间用量：${Math.round((state.networkSpentMs ?? 0) / 1000)} 秒／${Math.round((state.networkBudgetMs ?? 0) / 1000)} 秒；模型思考时间不计入。`,
-      `- ${esc(report.stopReason)}；本轮未进行登录态读取、自动投递、简历上传或邮件发送。`);
+    lines.push(`- Current request (requestId ${esc(request.requestId ?? '')}, ${request.kind === 'new' ? 'new request' : 'continuation'}): all runs share one observable-call budget (discovery ${limits.discovery ?? 20} / detail ${limits.detail ?? 20} / application ${limits.application ?? 10}). This is run ${request.runIndex}/${request.maxRuns}; opening another run does not reset the budget. Only one run may be active per request. A report ends the run; use end --run RUN_ID to close an abandoned run before continuing. Use start --new-request only for a new scan explicitly requested by the user; its budget is independent and does not carry over prior spend. This run used: discovery ${own.discovery ?? 0}, detail ${own.detail ?? 0}, application ${own.application ?? 0}.`,
+      `- Project request ledger: ${requestLedgerText(report.ledger)}`,
+      `- Network time used: ${Math.round((state.networkSpentMs ?? 0) / 1000)} seconds / ${Math.round((state.networkBudgetMs ?? 0) / 1000)} seconds; model thinking time is excluded.`,
+      `- ${esc(report.stopReason)}; no authenticated browsing, application submission, resume upload, or email sending occurred in this run.`);
   }
   for (const w of state.warnings) lines.push(`- ${esc(w)}`);
   lines.push('', `<!-- nz-job-scout-v1 run=${state.id} context=${state.context} -->`, '');
@@ -309,7 +309,7 @@ export async function produce(root, state, reader, input, now = new Date().toISO
     .map(i => ({ recordId: i.recordId, category: i.category, fit: i.judgment?.fit ?? null, reason: i.reason }));
   if (overflow.length) state.warnings.push(`${overflow.length} additional records of this run are kept in the JSON sidecar and indexed in this report; they are not promoted to recommendations.`);
   const budgetShort = Object.keys(state.budget.used).filter(k => state.budget.used[k] >= state.budget.limits[k]);
-  const stopReason = budgetShort.length ? `阶段预算已到（${budgetShort.map(k => `${k} ${state.budget.used[k]}/${state.budget.limits[k]}`).join('，')}），未挤占后段预算` : '按当前已取得证据结束；未完成来源和未评估条目已披露';
+  const stopReason = budgetShort.length ? `Stage budget reached (${budgetShort.map(k => `${k} ${state.budget.used[k]}/${state.budget.limits[k]}`).join(', ')}); later-stage allowances were not consumed` : 'Finished with the available evidence; incomplete sources and unassessed records are disclosed';
   const { records: _drop, ...stateWithoutRecords } = state;
   const ledger = requestLedger(await runStates(root));
   const report = { format: 'nz-job-scout-report-v1', generatedAt: now, date: nzDate(now), context: state.context,

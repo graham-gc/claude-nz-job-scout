@@ -10,7 +10,7 @@ export function criteria(input) {
   if (!input || !Array.isArray(input.roleFamilies) || !input.roleFamilies.length || input.roleFamilies.some(x => typeof x !== 'string' || !x.trim())) throw new Error('roleFamilies must contain the requested role families');
   const disclosures = [];
   const location = input.location ?? { country: 'New Zealand', onsiteCities: [], remoteOutside: true };
-  if (!input.location) disclosures.push('未提供 location：地区按国家层级（New Zealand）判定，未默认任何城市；城市级匹配需显式提供 onsiteCities。');
+  if (!input.location) disclosures.push('No location supplied: the region is evaluated at country level (New Zealand), without assuming a city. Supply onsiteCities for city-level matching.');
   const result = { roleFamilies: input.roleFamilies, postingDays: input.postingDays ?? 7,
     location: { country: location.country ?? 'New Zealand', onsiteCities: location.onsiteCities ?? [], remoteOutside: location.remoteOutside !== false },
     all: input.all ?? [], any: input.any ?? [], preferences: input.preferences ?? [], exclusions: input.exclusions ?? [],
@@ -26,7 +26,7 @@ export function criteria(input) {
     if (['lte', 'gte'].includes(c.op) && typeof c.value !== 'number' && !/^\d{4}-\d{2}-\d{2}$/.test(c.value)) throw new Error('lte/gte require a number or ISO date');
     if (['duration', 'durationWeeks', 'durationMonths'].includes(c.field) && c.valueUnit && !['weeks', 'months'].includes(c.valueUnit)) throw new Error('valueUnit must be weeks or months');
   }
-  if (!result.location.onsiteCities.length) disclosures.push('location.onsiteCities 为空：不会把任何城市判为冲突。');
+  if (!result.location.onsiteCities.length) disclosures.push('location.onsiteCities is empty: no city is treated as a conflict.');
   return result;
 }
 export const contextHash = (criteria, resumeHash) => hash({ criteria, resumeHash });
@@ -129,7 +129,7 @@ export function classify(record, config, judgment, now) {
   if (record.closure) {
     const bound = record.closure.scope === 'employer-posting' || closureBoundToAdvertisement(record, record.closure.source?.url);
     if (bound) return { category: 'closed', checks, reason: `${record.closure.scope} explicitly closed` };
-    return { category: 'mirror-expired', checks, reason: '只有镜像／聚合广告的过期说明：这证明该镜像广告已失效，不证明雇主岗位已关闭，雇主岗位状态仍未知' };
+    return { category: 'mirror-expired', checks, reason: 'Only the mirror advertisement states it has expired; the employer vacancy status remains unknown, not confirmed closed' };
   }
   // An identity anomaly is neither a recommendation nor a high-value lead.
   if (record.anomalies?.length || record.identityConflict) return { category: 'identity-anomaly', checks, reason: 'Identity could not be resolved across sources; not recommended' };

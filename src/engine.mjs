@@ -20,7 +20,7 @@ import { siteKey } from './site.mjs';
 export const MAX_RUNS_PER_REQUEST = 3;
 
 const STAGES = ['discovery', 'detail', 'application'];
-const STAGE_LABEL = { discovery: '发现', detail: '详情', application: '申请' };
+const STAGE_LABEL = { discovery: 'discovery', detail: 'detail', application: 'application' };
 const GROUPS = ['boards', 'linkedin', 'search'];
 
 export function zeroCounters() {
@@ -128,7 +128,7 @@ export async function start(project, input, resumePath, options = {}) {
     const requestRuns = prior.filter(s => s.request?.requestId === requestId);
     const live = requestRuns.filter(s => !runFinished(s));
     if (live.length) {
-      throw new Error(`本次请求（requestId ${requestId}）已有 ${live.length} 个活跃运行（${live.map(r => r.id).join('、')}）；同一请求同时只能有一个活跃运行，否则两轮各自都能花满同一份预算。请先结束它：产出报告即结束该运行，或用 end --run RUN_ID 关闭未完成的运行，之后才能续跑。若这是用户明确发起的新一次扫描，请用 start --new-request。`);
+      throw new Error(`Request ${requestId} already has ${live.length} active run(s): ${live.map(r => r.id).join(', ')}. Only one run per request may be active. Finish it by producing a report, or close an abandoned run with end --run RUN_ID before continuing. Use start --new-request only for a new scan explicitly requested by the user.`);
     }
     // Everything this request has already spent, and every run it has already
     // opened, is counted before a new run is allowed to exist.
@@ -143,9 +143,9 @@ export async function start(project, input, resumePath, options = {}) {
     const usedUp = STAGES.filter(stage => (spent.used[stage] ?? 0) >= limits[stage]);
     if (requestRuns.length >= MAX_RUNS_PER_REQUEST || usedUp.length) {
       const reason = requestRuns.length >= MAX_RUNS_PER_REQUEST
-        ? `本次请求（requestId ${requestId}）已开启 ${requestRuns.length} 轮，上限为 ${MAX_RUNS_PER_REQUEST} 轮`
-        : `本次请求（requestId ${requestId}）的${usedUp.map(stage => STAGE_LABEL[stage] ?? stage).join('、')}预算已用尽（${usedUp.map(stage => `${spent.used[stage]}/${limits[stage]}`).join('，')}）`;
-      throw new Error(`${reason}。同一请求内的续跑共用同一份预算，重开 run 不会把它重置。若这是用户明确发起的新一次扫描，请用 start --new-request 开启新请求：新请求的预算独立，且不结转上一次请求的用量。`);
+        ? `Request ${requestId} has opened ${requestRuns.length} runs; maximum ${MAX_RUNS_PER_REQUEST} runs`
+        : `Request ${requestId}: ${usedUp.map(stage => STAGE_LABEL[stage] ?? stage).join(', ')} budget exhausted (${usedUp.map(stage => `${spent.used[stage]}/${limits[stage]}`).join(', ')})`;
+      throw new Error(`${reason}. Continuation runs share the same budget; opening another run does not reset it. Use start --new-request only for a new scan explicitly requested by the user; its budget is independent of previous requests.`);
     }
     const state = {
       schema: 1, id, startedAt: now,
@@ -361,7 +361,7 @@ export function searchResult(state, id, urls = [], error) {
     }
   }
   Object.assign(t, { status: error ? 'error' : 'completed', ...(error ? { error: String(error).slice(0, 500) } : { urls: records.map(r => r.canonicalUrl) }), ...(rejected.length ? { rejected } : {}) });
-  if (error) state.warnings.push(`WebSearch 路径失败（${String(error).slice(0, 200)}）：该路径能发现的来源本轮为盲区；已知库存继续运行，未用其它结果替代。`);
+  if (error) state.warnings.push(`WebSearch path failed (${String(error).slice(0, 200)}): sources discoverable through this path are a blind spot. Known inventories continue; no substitute search results were used.`);
   Object.assign(state.attempts.find(a => a.id === t.id), { outcome: 'model-reported', reportedStatus: t.status });
   merge(state, records);
   for (const bad of rejected) state.warnings.push(`Rejected discovery URL ${bad.url}: ${bad.reason}`);
@@ -681,6 +681,7 @@ export function validateJudgments(input, state) {
     if (!record || seen.has(j.recordId)) throw new Error('Unknown/duplicate judgment record ID');
     seen.add(j.recordId);
     if (!['strong', 'possible', 'weak'].includes(j.fit) || !Array.isArray(j.reasons) || !j.reasons.length || j.reasons.some(x => typeof x !== 'string' || x.length > 1000)) throw new Error('fit: strong|possible|weak; reasons: nonempty text array');
+    if (j.reasons.some(x => /\p{Script=Han}/u.test(x))) throw new Error(`Judgment reasons for ${j.recordId} must be written in English; preserve source-language text only in quotes`);
     if (!Array.isArray(j.quotes) || !j.quotes.length || j.quotes.some(q => typeof q !== 'string' || q.length < 8 || !(record.fields.duties?.value ?? '').includes(q))) throw new Error('quotes must be exact excerpts from this record duties; model cannot fabricate supporting evidence');
   }
   return input.judgments;

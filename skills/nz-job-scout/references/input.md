@@ -19,7 +19,7 @@
 }
 ```
 
-This is a **schema example**, not a prefilled profile. Do not copy its availability options without confirming they express this user's request. If summer full-time work is limited to specific dates, add `startAt` and `endAt` conditions to the appropriate alternative; without explicit vacancy dates those conditions stay unknown. The parser currently does not infer semester/work-rights rules or convert FTE to hours. Missing structured evidence stays unknown, rather than being supplied by the model. A prototype may therefore retain good roles under “值得确认”.
+This is a **schema example**, not a prefilled profile. Do not copy its availability options without confirming they express this user's request. If summer full-time work is limited to specific dates, add `startAt` and `endAt` conditions to the appropriate alternative; without explicit vacancy dates those conditions stay unknown. The parser currently does not infer semester/work-rights rules or convert FTE to hours. Missing structured evidence stays unknown, rather than being supplied by the model. A prototype may therefore retain good roles under "Worth confirming".
 
 **`requestId` names one user request, and the budget belongs to it.** `start` writes a `requestId` into the request file and every continuation run of the same request keeps it; the runs of one request share one observable-call budget, so reopening a run never buys more calls. A scan the user explicitly starts afresh is a new request: run `start --new-request`, which opens a fresh budget and does not carry the previous request's spend over. The same resume with the same criteria is not what makes two requests one request. The report prints the request ledger of the project, so every request that was opened is visible.
 
@@ -36,6 +36,8 @@ This is a **schema example**, not a prefilled profile. Do not copy its availabil
 Date-only publication uses the Auckland calendar date; timestamp publication uses elapsed hours. Age 0–7 days inclusive passes the default window. Only first-published or explicit advertised-date semantics pass; last-published/created/updated timestamps do not. A missing deadline is not a hard failure. An anomalous deadline is retained as an advisory, never silently fixed or used for an urgency claim.
 
 Exclusions can use `{ "employer": "...", "requisitionId": "...", "url": "https://...", "decision": "applied" }`. Exact known req IDs override reused titles/URLs. Do not add a decision simply because materials were generated. The project’s legacy `.nz-job-scout-state.json` is read without modification; no private decision file is committed.
+
+Write request criteria, preferences, disclosures, and judgment reasons in English even when the user asks in another language. Source quotations and proper names remain verbatim, not translated. The runtime rejects Han-script characters in generated judgment reasons; this check does not apply to source quotations and is not a general-purpose language detector.
 
 Model output contains no job facts:
 
