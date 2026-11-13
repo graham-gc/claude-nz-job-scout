@@ -86,7 +86,13 @@ export function charge(state, stage, source, kind = 'http') {
   // must not eat the application allowance of the same source: each stage
   // has its own ceiling and its own counter.
   const stageUsed = used.stages?.[stage] ?? { requests: 0 };
-  const requestLimit = stage === 'discovery' ? perSource.discoveryRequests : stage === 'application' ? perSource.applicationRequests : perSource.detailRequests;
+  // A search ticket is a ledger entry for one model-reported search, not a
+  // fetch of that source's content. The per-source ceiling exists so one board
+  // cannot consume the whole run; applying it to tickets as well made the
+  // documented five-ticket search allowance unreachable, because the search
+  // group ceiling is five. Tickets are bounded by that group ceiling instead.
+  const ticketCharge = kind === 'model-search-ticket';
+  const requestLimit = ticketCharge ? null : stage === 'discovery' ? perSource.discoveryRequests : stage === 'application' ? perSource.applicationRequests : perSource.detailRequests;
   if (requestLimit != null && stageUsed.requests >= requestLimit) throw new Error(`Per-source ${stage} request limit reached for ${source}`);
   if (stage === 'discovery') state.budget.groups[group] = (state.budget.groups[group] ?? 0) + 1;
   state.budget.stageGroups[stage][group] = (state.budget.stageGroups[stage][group] ?? 0) + 1;
