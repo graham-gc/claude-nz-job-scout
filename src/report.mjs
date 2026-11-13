@@ -69,6 +69,29 @@ function unreadReason(record) {
   if (record.closure) bits.push(`关闭证据（${record.closure.scope}）：${record.closure.quote ?? ''}`);
   return bits.join('；');
 }
+// Every record is left in its own state. "未评估" alone says nothing about
+// why a record was not assessed, so each record carries the status this run
+// actually reached: read or not, from which page, and what is still unknown.
+export function leadStatus(record) {
+  const r = record ?? {};
+  if (r.readState === 'read') {
+    if (r.authority === 'registered-official') return '已读雇主原帖：官网关联已核验';
+    if (r.closure) return '已读镜像页：镜像广告已过期，雇主原帖状态未知';
+    return '已读来源页：未经雇主官网核验，雇主原帖未核验';
+  }
+  if (r.readState === 'closed-stated') return '已读页面：页面声明该广告已关闭';
+  if (r.readState === 'partial') return `部分读到：${r.detailError ?? '字段不全'}`;
+  if (r.readState === 'unreadable') return `已尝试但无法核验：${r.detailError ?? '页面不可核验'}`;
+  if (r.readState === 'not-read') return r.detailError ? `未读到：${r.detailError}` : '未尝试读取';
+  return `状态：${r.readState ?? '未知'}`;
+}
+// A record without a title is still identifiable: its own address is shown.
+export function leadLabel(record) {
+  const r = record ?? {};
+  const title = r.fields.title?.value ?? r.lead?.title;
+  if (title) return title;
+  try { const u = new URL(r.canonicalUrl); return `${u.hostname}${u.pathname}`; } catch { return String(r.canonicalUrl ?? '未知页面'); }
+}
 
 // --- preferences -------------------------------------------------------------
 // Preferences are executable rules over recorded facts. Their basis is stated.
@@ -187,26 +210,40 @@ export function render(report) {
   const shown = diagnostics.slice(0, 15), diagnosticOverflow = diagnostics.slice(15);
   for (const item of shown) {
     const r = record(item.recordId);
-    lines.push(`- ${esc(r.fields.title?.value ?? r.lead.title)} — ${esc(r.fields.employer?.value ?? r.lead.employer)}：${esc(item.reason)}`);
+    const employer = r.fields.employer?.value ?? r.lead.employer;
+    const head = employer ? `${esc(leadLabel(r))} — ${esc(employer)}` : esc(leadLabel(r));
+    lines.push(`- ${head}：${esc(item.reason)}`);
+    lines.push(`  - 本轮状态：${esc(leadStatus(r))}`);
     const obs = obstacles(item);
     if (obs.length) lines.push(`  - 障碍：${obs.join('；')}`);
     const unread = unreadReason(r);
-    if (unread && ['unassessed', 'identity-anomaly'].includes(item.category)) lines.push(`  - 未读原因：${esc(unread)}`);
-    lines.push(`  - 记录：\`${r.recordId}\``);
+    if (unread && ['unassessed', 'identity-anomaly', 'mirror-expired', 'closed'].includes(item.category)) lines.push(`  - 未读原因：${esc(unread)}`);
+    lines.push(`  - 页面：${link('页面', r.canonicalUrl)}`, `  - 记录：\`${r.recordId}\``);
   }
   if (diagnosticOverflow.length) {
     lines.push('', `其余 ${diagnosticOverflow.length} 条诊断记录按 ID 索引（完整字段见同目录 JSON 侧车）：`, '');
     for (const item of diagnosticOverflow) {
       const r = record(item.recordId);
-      lines.push(`- \`${r.recordId}\` ${esc(r.fields.title?.value ?? r.lead.title)} — ${esc(r.fields.employer?.value ?? r.lead.employer)}：${esc(item.reason)}`);
+      const employer = r.fields.employer?.value ?? r.lead.employer;
+      const head = employer ? `${esc(leadLabel(r))} — ${esc(employer)}` : esc(leadLabel(r));
+      lines.push(`- \`${r.recordId}\` ${head}：${esc(item.reason)}｜本轮状态：${esc(leadStatus(r))}`);
     }
   }
   lines.push('', '## 状态变化与去重', '');
   for (const w of withdrawals) lines.push(`- 撤回此前${w.scope === 'advertisement' ? '广告' : '岗位'}：${esc(w.title)} — ${esc(w.employer)}。${esc(w.reason)}（不改写历史报告）`);
   if (pendingHistory.length) lines.push(`- ${pendingHistory.length} 个历史推荐本轮未重新核实：不等于已关闭。`);
+  // Each record reports the state this run actually reached. A single
+  // "unread" total hides whether a link was never tried, could not be
+  // verified, or was read from a mirror whose original posting is unknown.
+  const statusCounts = new Map();
+  for (const r of Object.values(report.records)) {
+    const s = leadStatus(r);
+    statusCounts.set(s, (statusCounts.get(s) ?? 0) + 1);
+  }
   lines.push(`- 已决定排除：${items.filter(i => i.category === 'decided').length}；无实质变化而不重复展示：${report.unchanged}。`,
     `- 招聘渠道待核查：${channels.length} 条（面向雇主的渠道页面，不是岗位推荐，不计入岗位统计）。`,
     `- 发现 ${Object.keys(report.records).length} 条记录；已评估 ${items.filter(i => i.judgment).length} 条；未评估 ${items.filter(i => i.category === 'unassessed').length} 条。未评估不等于不合适。`,
+    `- 各条记录的本轮状态：${[...statusCounts].map(([s, n]) => `${s} ${n} 条`).join('；')}。`,
     '', '## 来源与预算', '');
   for (const s of state.sources) lines.push(`- ${link(s.name, s.url)}：${s.status}；实际读到 ${s.reviewed} 条${s.advertisedTotal != null ? `／列表标称 ${s.advertisedTotal}` : ''}。${esc(s.reason ?? s.note ?? '')}`);
   const budget = state.budget, groups = budget.groups ?? {}, limits = budget.limits ?? {};

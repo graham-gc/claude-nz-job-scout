@@ -148,6 +148,48 @@ export class Reader {
       throw error;
     }
   }
+  // A robots.txt that answers with a redirect is not a refusal: the site moved
+  // the file (www to the apex host, for example). The redirect is followed
+  // within the same safety checks and the same budget — every hop is charged
+  // like any other request — and only a real prohibition or a real access
+  // restriction stops the run.
+  //
+  // Two things the chain must not do. It must not stop at a redirect whose
+  // target is not named /robots.txt: a site may publish its rules under a name
+  // of its own choosing, and rules that were never read are rules that were
+  // never applied. And it must not run out of hops one request before the
+  // file that holds the rules: the budget counts redirects followed, not
+  // requests made, so five redirects still leave room for the final read.
+  async robotsFor(u, stage, source) {
+    const MAX_REDIRECTS = 5;
+    let target = new URL('/robots.txt', u.origin);
+    let response = null;
+    const visited = new Set();
+    let redirects = 0;
+    for (;;) {
+      if (visited.has(target.href)) break; // a loop: no readable file
+      visited.add(target.href);
+      response = await this.once(target.href, stage, source, 'robots');
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      const location = response.headers?.location;
+      if (!location) break;
+      if (redirects >= MAX_REDIRECTS) break; // the redirect budget is spent
+      redirects++;
+      let next;
+      try { next = publicUrl(new URL(location, target).href); } catch { break; }
+      // A redirect to the site root names the canonical host: the file is read
+      // there. Any other path is followed as it is given — the rules may live
+      // under a name of the site's own choosing.
+      if (next.pathname === '/' || next.pathname === '') next = new URL('/robots.txt', next.origin);
+      target = next;
+    }
+    // The chain ended without a readable file. No robots file is not a
+    // prohibition: it is read the way an absent file (404) is read — the site
+    // published no rules, so none are applied. The attempts stay in the log
+    // with their real status.
+    if (response) return { ...response, status: 404, body: '' };
+    return { status: 404, headers: {}, body: '' };
+  }
   async get(value, stage, source, depth = 0) {
     const u = publicUrl(value); u.hash = '';
     const url = u.toString();
@@ -155,7 +197,12 @@ export class Reader {
     if (/\/(?:login|signup|sign-in|authwall|checkpoint|captcha)(?:\/|\?|$)/i.test(u.pathname)) throw new Error('Login/challenge route is not a public vacancy');
     if (this.state.cache[url]) return JSON.parse(await readFile(join(this.folder, this.state.cache[url]), 'utf8'));
     if (!Object.hasOwn(this.state.robots, u.origin)) {
-      const response = await this.once(`${u.origin}/robots.txt`, stage, source, 'robots');
+      const response = await this.robotsFor(u, stage, source);
+      if ([401, 403, 429].includes(response.status)) {
+        this.state.blockedSources[source] = `robots HTTP ${response.status}`;
+        this.state.blockedSources[u.origin] = `robots HTTP ${response.status}`;
+        throw new Error(`Robots access restricted (${response.status}); no retry`);
+      }
       if (![200, 404, 410].includes(response.status)) {
         this.state.blockedSources[source] = `robots status ${response.status}`;
         this.state.blockedSources[u.origin] = `robots status ${response.status}`;

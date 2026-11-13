@@ -195,14 +195,16 @@ export function observeText(record, text, response) {
   else if (kind) record.opportunityKind = fact('talent-pool', response, kind);
   const dates = name => {
     const pattern = name === 'postedAt'
-      ? /(?:Posted on|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+20\d{2})/i
+      // "Posted 28 February, 2026" is the wording an aggregator uses: no "on",
+      // and a comma before the year.
+      ? /(?:Posted(?:\s+on)?|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+20\d{2})/i
       : new RegExp(`(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\\s*:?\\s*(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`
         + `|Applications? close(?:s)?(?:\\s*at\\s*[\\d.]{1,5}\\s*(?:am|pm)?)?\\s+on\\s+(?:[A-Za-z]+,?\\s+)?(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`, 'i');
     const m = body.match(pattern);
     if (m) {
       const raw = m[1] ?? m[2];
       if (!raw) return;
-      const date = new Date(raw.replace(/(\d)(st|nd|rd|th)/, '$1') + ' UTC');
+      const date = new Date(raw.replace(/(\d)(st|nd|rd|th)/, '$1').replace(/,/g, '') + ' UTC');
       if (!isNaN(date)) {
         const value = date.toISOString().slice(0, 10);
         if (name === 'postedAt') setPostedAt(fields, value, response, m[0], 'advertised-date');
@@ -457,6 +459,20 @@ function locationCandidate($, text, body) {
   return null;
 }
 
+// The page states that the advertisement it shows is closed. The employer's
+// own wording and the wording an aggregator uses for the advertisement it
+// mirrors — "This listing expired on 05 Mar. Applications are no longer
+// accepted." — are the same statement, and both are read here: a page that
+// says so is not left looking like a live vacancy.
+const ADVERTISEMENT_SUBJECT = 'job|position|vacancy|role|listing|advertisement|advert|ad|posting';
+export const CLOSED_NOTICE = new RegExp([
+  `this (?:${ADVERTISEMENT_SUBJECT}) (?:has expired|expired)(?:\\s+on\\s+[^.]{0,24})?`,
+  `this (?:${ADVERTISEMENT_SUBJECT}) (?:is no longer available|is no longer advertised|is now closed|has been closed|has been filled)`,
+  'no longer accepting applications',
+  'applications? (?:are|have) (?:now )?closed',
+  'applications? (?:are|have) no longer accepted'
+].join('|'), 'i');
+
 export function fromHtml(record, response) {
   const $ = load(response.body), f = record.fields;
   const main = $('main').length ? $('main').clone() : $('body').clone();
@@ -472,10 +488,15 @@ export function fromHtml(record, response) {
     record.readState = 'unreadable'; record.detailError = 'Page heading does not match vacancy; possible generic redirect/soft 404'; return record;
   }
   const posting = jobPostings($).find(j => !f.title?.value || key(j.title) === key(f.title.value));
-  const closed = text.match(/(?:this (?:job|position|vacancy|role) (?:has expired|is no longer available|is now closed)|no longer accepting applications|this job is no longer advertised|applications (?:are|have) (?:now )?closed)/i);
+  const closed = text.match(CLOSED_NOTICE);
   if (closed) {
     record.closure = { scope: closureScope(text), observedAt: response.observedAt, ...fact(true, response, closed[0]) };
-    record.readState = 'closed-stated'; return record;
+    record.readState = 'closed-stated';
+    // The employer's own posting ends the read: there is nothing left to read.
+    // A mirror that says its advertisement expired keeps the facts it printed:
+    // the record stays a usable historical lookup entry — with its own
+    // publication date — while the employer's own posting stays unknown.
+    if (isEmployerPosting(record)) return record;
   }
   if (posting) {
     f.title = fact(posting.title, response);
@@ -516,6 +537,13 @@ export function closureScope(text) {
     ? 'employer-posting' : 'advertisement';
 }
 
+// A record read from an ATS tenant is the employer's own posting. A record
+// read from a plain web page is only the employer's posting once this run has
+// verified that employer's careers page and linked it to this record; until
+// then the page is a mirror or an aggregator, and what it says speaks for
+// that advertisement alone.
+export const isEmployerPosting = record => record.provider !== 'html' || record.authority === 'registered-official';
+
 // A closure statement only closes the vacancy when the page that made it is
 // the employer's own posting, bound to this advertisement. A mirror or
 // aggregator that says "this job has expired" proves that advertisement
@@ -530,7 +558,7 @@ export function closureBoundToAdvertisement(record, url) {
   if (!url) return false;
   let u;
   try { u = new URL(String(url)); } catch { return false; }
-  const employerPosting = record.provider !== 'html' || record.authority === 'registered-official';
+  const employerPosting = isEmployerPosting(record);
   const known = new Set((record.aliases ?? []).map(canonicalLocal).filter(Boolean));
   if (known.has(canonicalLocal(url))) return employerPosting;
   const tenant = tenantOf(url);
@@ -551,7 +579,7 @@ export function formProof(record, response) {
   if (response.status !== 200 || record.authority !== 'registered-official') return null;
   const $ = load(response.body), title = key(record.fields.title?.value);
   if (!title || !$('h1,h2,title').toArray().some(e => key($(e).text()).includes(title))) return null;
-  if (/no longer accepting applications|this job (?:has expired|is no longer available)|applications are closed/i.test(textOf(response.body))) return null;
+  if (CLOSED_NOTICE.test(textOf(response.body))) return null;
   const known = new Set(record.aliases.map(canonicalLocal).filter(Boolean));
   const id = record.ids.advertisement;
   const tied = known.has(canonicalLocal(response.url)) || (id && new URL(response.url).pathname.split('/').includes(String(id)));

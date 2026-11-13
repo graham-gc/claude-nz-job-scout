@@ -6,7 +6,7 @@ import { load } from './html.mjs';
 import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
 import { criteria, contextHash, hardChecks, isChannel } from './criteria.mjs';
-import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean } from './evidence.mjs';
+import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, CLOSED_NOTICE } from './evidence.mjs';
 import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
 import { siteKey } from './site.mjs';
 
@@ -457,7 +457,7 @@ export const APPLICATION_STATUSES = ['not-checked', 'none-found', 'entry-observe
 export const APPLICATION_KINDS = ['job-specific-form', 'job-specific-external-ats', 'email-in-posting', 'none', 'unverified'];
 // A closed posting is not an application route. The same wording that keeps
 // a page out of formProof also keeps it out of the external-ATS proof.
-const CLOSED_NOTICE = /no longer accepting applications|applications? (?:are|have) (?:now )?closed|this (?:job|position|vacancy|role) (?:has expired|is no longer available|is now closed|has been closed|has been filled)|(?:job|position|vacancy|role) (?:is|has been) (?:closed|filled|removed)|no longer (?:advertised|available|open)|we (?:are|will) no longer (?:accepting|hiring)/i;
+const ROUTE_CLOSED = new RegExp(`${CLOSED_NOTICE.source}|no longer (?:advertised|available|open)|we (?:are|will) no longer (?:accepting|hiring)|(?:job|position|vacancy|role) (?:is|has been) (?:closed|filled|removed)`, 'i');
 // An external ATS page only proves a route when it offers a job-specific
 // action: a form that submits for this advertisement, or a link that carries
 // the advertisement id into an application route.
@@ -564,7 +564,7 @@ async function followApplicationEntry(record, reader, entry) {
   if (response.status !== 200) {
     return { status: 'none-found', kind: 'none', reason: `Application entry ${entry.link} returned HTTP ${response.status}`, url: entry.link, entryUrl: entry.link, observedAt: response.observedAt, snapshot: response.snapshot };
   }
-  const closed = CLOSED_NOTICE.exec(textOf(response.body));
+  const closed = ROUTE_CLOSED.exec(textOf(response.body));
   if (closed) return { status: 'none-found', kind: 'none', reason: `Application target states it is closed: "${closed[0]}"`, url: entry.link, entryUrl: entry.link, observedAt: response.observedAt, snapshot: response.snapshot };
   const $ = load(response.body);
   if (!boundToAdvertisement($, response, entry.advertisement)) {
@@ -592,7 +592,7 @@ function externalAtsProof(record, response) {
   const $ = load(response.body), title = key(record.fields.title?.value);
   if (title && !$('h1,h2,title').toArray().some(e => key($(e).text()).includes(title))) return null;
   // A page that says the posting is closed is not an open application route.
-  if (CLOSED_NOTICE.test(textOf(response.body))) return null;
+  if (ROUTE_CLOSED.test(textOf(response.body))) return null;
   // HTTP 200 plus a matching title is not proof: the page must offer an
   // action bound to this advertisement.
   const action = applicationAction($, response, shape.advertisement);
@@ -620,7 +620,7 @@ export async function verifyApplication(record, reader) {
       const response = await reader.get(url, 'application', chargeSourceFor(record, url));
       // A page that states the posting is closed offers no route: the entry
       // exists, but the vacancy behind it is gone.
-      const closed = CLOSED_NOTICE.exec(textOf(response.body));
+      const closed = ROUTE_CLOSED.exec(textOf(response.body));
       if (closed) { record.application = { status: 'none-found', kind: 'none', reason: `Posting states it is closed: "${closed[0]}"` }; continue; }
       const proof = formProof(record, response);
       if (proof) { record.application = { status: 'verified', kind: 'job-specific-form', ...proof }; return; }
