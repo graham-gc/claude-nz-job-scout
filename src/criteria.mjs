@@ -1,6 +1,6 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
-import { channelKind, closureBoundToAdvertisement, publicationDateIn, readDate, statedFacts } from './evidence.mjs';
+import { channelKind, closureBoundToAdvertisement, isEmployerPosting, publicationDateIn, readDate, statedFacts } from './evidence.mjs';
 import { foreignScope, isForeignPlace, nzLocality, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
 
 export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
@@ -122,9 +122,25 @@ export function publicationVerdict(posted, config, now) {
 // must be readable without choosing between two days. A value with two
 // readings is only expired when every reading is in the past; when the
 // readings disagree, the status is "meaning ambiguous", never "expired".
-export function closingVerdict(closing, postedAt, now) {
+//
+// A validity window is a third thing. Google's JobPosting schema gives
+// `validThrough` one meaning: "the date when the job posting will expire". On
+// the employer's own posting that is the employer's own statement, and a date
+// in the past closes the advertisement. On a mirror or an aggregator the same
+// value speaks for that advertisement alone, and an ambiguous value speaks for
+// nothing, so it stays pending verification.
+export function closingVerdict(closing, postedAt, now, authoritative = false) {
   const value = String(closing.value);
   if (!DEADLINE_SEMANTICS.includes(closing.semantics)) {
+    if (closing.semantics === 'valid-through' && authoritative) {
+      const { readings } = readDate(value);
+      if (!readings.length) return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it is not read as a date and is not used for expiry`), advisory: true };
+      if (readings.length > 1) return { ...verdict('Closing date', 'unknown', `The validity window (${value}) reads as two different days (${readings.join(' or ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
+      const today = nzDate(now);
+      if (readings[0] >= today) return null;
+      if (postedAt?.value && readings[0] < String(postedAt.value).slice(0, 10)) return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it precedes the stated publication date`), advisory: true };
+      return verdict('Closing date', 'conflict', `The employer's own posting states the advertisement is valid until ${value} (valid-through); that date has passed`);
+    }
     return { ...verdict('Closing date', 'unknown', `The page carries a ${closing.semantics ?? 'unstated'} value (${value}); what it denotes is not established — pending verification against the employer's original posting`), advisory: true };
   }
   const stamp = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(Z|[+-]\d{2}:?\d{2})?$/.test(value) ? Date.parse(value) : NaN;
@@ -158,7 +174,7 @@ export function hardChecks(record, config, now) {
   checks.push(locationVerdict(record, config));
   checks.push(publicationVerdict(f.postedAt, config, now));
   if (f.closesAt?.value) {
-    const closing = closingVerdict(f.closesAt, f.postedAt, now);
+    const closing = closingVerdict(f.closesAt, f.postedAt, now, isEmployerPosting(record));
     if (closing) checks.push(closing);
   }
   checks.push(...config.all.map(c => condition(record, c)));
@@ -180,6 +196,12 @@ export function verifyDisqualifiers(record, config, judgment, now) {
   for (const claim of judgment?.disqualifiers ?? []) {
     if (!claim || typeof claim.quote !== 'string' || !duties.includes(claim.quote)) continue;
     if (claim.kind === 'publication-outside-window') {
+      // The reader's own publication date decides when it decided. A
+      // quotation fills a gap; it never overrules a fact the run already
+      // recorded, and a quotation whose date is not bound to the publication
+      // wording proves nothing.
+      const recorded = publicationVerdict(record.fields.postedAt, config, now);
+      if (recorded.status === 'satisfied' || recorded.status === 'conflict') continue;
       const { readings } = publicationDateIn(claim.quote);
       if (!readings.length) continue;
       const today = nzDate(now);

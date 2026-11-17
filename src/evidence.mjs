@@ -204,14 +204,32 @@ export function readDate(raw) {
 }
 
 // The wording that makes a date a publication date. A date that belongs to
-// something else — an application deadline, an event, a review — is not one.
+// something else — an application deadline, an event, a review, an office
+// opening — is not one.
 const PUBLICATION_WORDING = /\b(?:posted|published|advertised|listed|advertisement date|date posted|date published)\b/i;
+// The date has to be bound to the wording. "Our office opened on 15/10/2026 and
+// this role was first advertised on 16/11/2026" states one publication date,
+// and it is the second one; the first date is a different fact about a
+// different thing. A quotation that carries the wording and a date somewhere
+// else proves nothing, so the binding is what counts.
+const DATE_SOURCE = String.raw`(\d{4}-\d{2}-\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+\d{4})`;
+const PUBLICATION_DATE_PATTERNS = [
+  new RegExp(String.raw`(?:posted|published|advertised|listed)\s*(?:on|at|from)?\s*:?\s*${DATE_SOURCE}`, 'gi'),
+  new RegExp(String.raw`(?:advertisement date|date posted|date published)\s*:?\s*${DATE_SOURCE}`, 'gi'),
+  new RegExp(String.raw`${DATE_SOURCE}\s*(?:[-–—|,]\s*)?(?:was\s+)?(?:posted|published|advertised|listed)`, 'gi'),
+];
 export function publicationDateIn(text) {
   const body = normaliseText(text);
   if (!PUBLICATION_WORDING.test(body)) return { readings: [], format: 'no-publication-wording' };
-  const m = body.match(/(\d{4}-\d{2}-\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+\d{4})/);
-  if (!m) return { readings: [], format: 'no-date' };
-  return readDate(m[1]);
+  const bound = new Set();
+  for (const pattern of PUBLICATION_DATE_PATTERNS) {
+    for (const m of body.matchAll(pattern)) bound.add(m[1].trim());
+  }
+  if (!bound.size) return { readings: [], format: 'no-date' };
+  // Two different publication dates in one quotation cannot both be the day
+  // the posting was published on, so nothing is decided by them.
+  if (bound.size > 1) return { readings: [], format: 'ambiguous' };
+  return readDate([...bound][0]);
 }
 
 // A quoted passage is read with focused patterns: the model points at one
