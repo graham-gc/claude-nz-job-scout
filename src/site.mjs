@@ -39,6 +39,26 @@ export function siteKey(url) {
   try { return `site:${new URL(String(url)).hostname.toLowerCase()}`; } catch { return 'site:unknown'; }
 }
 
+// The advertisement a URL names, with the provider and tenant that own it.
+// An advertisement is only an identity inside its own tenant: a Lever
+// advertisement is a UUID, a Greenhouse one is a number, and neither id means
+// anything outside the board that issued it. A URL that names no
+// advertisement (an inventory endpoint, a plain careers page) says so.
+export function adIdentity(url) {
+  let u;
+  try { u = new URL(String(url)); } catch { return null; }
+  const p = u.pathname.split('/').filter(Boolean);
+  if (u.hostname === 'job-boards.greenhouse.io' && p[0]) return { provider: 'greenhouse', account: p[0], advertisement: p[1] === 'jobs' && /^\d+$/.test(p[2] ?? '') ? p[2] : null };
+  if (u.hostname === 'jobs.lever.co' && p[0]) return { provider: 'lever', account: p[0], advertisement: /^[a-f0-9-]{36}$/i.test(p[1] ?? '') ? p[1] : null };
+  if (u.hostname === 'jobs.smartrecruiters.com' && p[0]) return { provider: 'smartrecruiters', account: p[0], advertisement: /^\d+(?:-|$)/.test(p[1] ?? '') ? p[1].split('-')[0] : null };
+  if (u.hostname === 'jobs.ashbyhq.com' && p[0]) return { provider: 'ashby', account: p[0], advertisement: p[1] && !/^\d+$/.test(p[1]) ? p[1] : null };
+  if (u.hostname === 'careers.asbgroup.co.nz') return { provider: 'asb', account: 'asb', advertisement: null };
+  // An inventory endpoint belongs to one tenant, and is attributed to it.
+  const tenant = tenantOf(url);
+  if (tenant?.account) return { provider: tenant.provider, account: tenant.account, advertisement: null };
+  return null;
+}
+
 // The key a read is charged to when the reader already knows the record's own
 // tenant: the record's own tenant wins over the URL's host.
 export function siteKeyFor(record, url) {

@@ -1,14 +1,15 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, lstat, unlink } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { load } from './html.mjs';
-import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
+import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId, validRun, lockRemovable } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
-import { criteria, contextHash, checksWithJudgment, DISQUALIFIER_KINDS, hardChecks, isChannel } from './criteria.mjs';
-import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, fieldIsEmployerPosting, SEMANTICS_WEIGHT, publicationOrderKey, CLOSED_NOTICE } from './evidence.mjs';
-import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
+import { criteria, contextHash, checksWithJudgment, classify, DISQUALIFIER_KINDS, hardChecks, isChannel } from './criteria.mjs';
+import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, fieldIsEmployerPosting, SEMANTICS_WEIGHT, publicationOrderKey, CLOSED_NOTICE, applyPageClaims, quoteCorpus } from './evidence.mjs';
+import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised, discoveryDisclosure } from './sources.mjs';
 import { siteKey } from './site.mjs';
+import { implementationIdentity, sameImplementation, incompatibilityMessage, unpinnedRunMessage, unpinnedRequestMessage, describeImplementation } from './runtime.mjs';
 
 // The ceiling belongs to the request, not to a run. Opening a new run does not
 // reset anything: the remaining budget of the request travels with it, and a
@@ -55,6 +56,13 @@ export function budgetDelta(current, baseline) {
   }
   return delta;
 }
+// What a run spent on its own, apart from what the request had already spent
+// before it started. The delta is derived from the run's own counters rather
+// than from a stored copy of them, so a command that failed after billed work
+// still reports the spend it made, and a continuation inherits that spend.
+export function ownSpend(state) {
+  return budgetDelta(state?.budget ?? {}, state?.request?.baselineBudget ?? zeroCounters());
+}
 export function addBudget(target, delta) {
   // The group counters are totals, not per-stage sums: adding them inside the
   // stage loop would count the same discovery once for every stage.
@@ -97,6 +105,11 @@ export function endRun(state, now = new Date().toISOString()) {
 
 export async function start(project, input, resumePath, options = {}) {
   const root = await rootAt(project), config = criteria(input), path = resolve(resumePath);
+  // The runtime that reads the pages of this run identifies itself, and the
+  // request keeps that identity for its whole life: a continuation run of the
+  // same request has to read pages under the same implementation, or the
+  // request's evidence and its conclusion come from two different parsers.
+  const implementation = await implementationIdentity();
   let resume;
   if (extname(path).toLowerCase() === '.pdf') resume = (await promisify(execFile)('pdftotext', ['-layout', path, '-'], { timeout: 10000, maxBuffer: 2_000_000 })).stdout;
   else if (['.txt', '.md'].includes(extname(path).toLowerCase())) resume = await readFile(path, 'utf8');
@@ -104,6 +117,12 @@ export async function start(project, input, resumePath, options = {}) {
   if (resume.trim().length < 100) throw new Error('Resume text missing/too short; supply a readable resume, not invented profile data');
   const sources = sourcesFor(config);
   const context = contextHash(config, hash(resume));
+  // The coverage the discovery cap could not cover is disclosed in the run's
+  // criteria. It is added after the context is hashed: the context names the
+  // criteria the user asked for, and it must stay the same across the runs of
+  // one request.
+  const coverage = discoveryDisclosure(config);
+  if (coverage) config.disclosures.push(coverage);
   const declared = typeof input.requestId === 'string' ? input.requestId.trim() : '';
   // A request is named, not inferred. The caller carries the id: the
   // continuation runs of one user request share it and share its budget, and a
@@ -133,12 +152,12 @@ export async function start(project, input, resumePath, options = {}) {
     // Everything this request has already spent, and every run it has already
     // opened, is counted before a new run is allowed to exist.
     const spent = zeroCounters();
-    for (const s of requestRuns) addBudget(spent, s.request?.own ?? budgetDelta(s.budget ?? {}, zeroCounters()));
+    for (const s of requestRuns) addBudget(spent, ownSpend(s));
     // Runs from before requests were named belong to no request: their spend is
     // shown in the ledger, but it is not carried into any request.
     const legacyRuns = prior.filter(s => !s.request?.requestId);
     const legacy = zeroCounters();
-    for (const s of legacyRuns) addBudget(legacy, budgetDelta(s.budget ?? {}, zeroCounters()));
+    for (const s of legacyRuns) addBudget(legacy, ownSpend(s));
     const limits = { discovery: 20, detail: 20, application: 10 };
     const usedUp = STAGES.filter(stage => (spent.used[stage] ?? 0) >= limits[stage]);
     if (requestRuns.length >= MAX_RUNS_PER_REQUEST || usedUp.length) {
@@ -147,8 +166,25 @@ export async function start(project, input, resumePath, options = {}) {
         : `Request ${requestId}: ${usedUp.map(stage => STAGE_LABEL[stage] ?? stage).join(', ')} budget exhausted (${usedUp.map(stage => `${spent.used[stage]}/${limits[stage]}`).join(', ')})`;
       throw new Error(`${reason}. Continuation runs share the same budget; opening another run does not reset it. Use start --new-request only for a new scan explicitly requested by the user; its budget is independent of previous requests.`);
     }
+    // The request carries the identity of the runtime that opened it. A
+    // continuation run under a different implementation is refused unless the
+    // change is accepted explicitly; either way the change is recorded. A run
+    // that predates the pinning has an unknown runtime, which is not the same
+    // as a compatible one.
+    const pinned = requestRuns.find(s => s.request?.implementation)?.request?.implementation ?? null;
+    const unpinned = requestRuns.some(s => !s.request?.implementation);
+    const implementationChanges = [...(requestRuns.find(s => s.request?.implementationChanges)?.request?.implementationChanges ?? [])];
+    if (unpinned || (pinned && !sameImplementation(pinned, implementation))) {
+      const refused = unpinned && !pinned
+        ? unpinnedRequestMessage(implementation)
+        : incompatibilityMessage(pinned, implementation);
+      if (!options.allowImplementationChange) throw new Error(refused);
+      implementationChanges.push({ from: pinned ?? { version: null, hash: null, unknown: true }, to: implementation, at: new Date().toISOString() });
+    }
     const state = {
       schema: 1, id, startedAt: now,
+      // The runtime that this run's evidence was read under.
+      implementation,
       // The request window is measured in network time, so model thinking cannot consume it.
       // The wall-clock deadline is only a hard safety cap for the whole run.
       deadline: Date.now() + 60 * 60000, networkBudgetMs: 15 * 60000, networkSpentMs: 0, wallDeadline: Date.now() + 60 * 60000,
@@ -158,6 +194,8 @@ export async function start(project, input, resumePath, options = {}) {
       request: { requestId, kind: requestKind, context, maxRuns: MAX_RUNS_PER_REQUEST,
         runIndex: requestRuns.length + 1,
         startedAt: requestRuns.length ? requestRuns[0].startedAt : now,
+        implementation: pinned ?? implementation,
+        implementationChanges,
         baselineBudget: JSON.parse(JSON.stringify(spent)), own: zeroCounters(), finishedAt: null },
       budget: {
         limits,
@@ -208,7 +246,7 @@ export function requestLedger(states) {
     const entry = requests.get(id) ?? { requestId: id, runs: 0, spent: zeroCounters(), startedAt: s.startedAt ?? null };
     entry.runs++;
     entry.startedAt = entry.startedAt && entry.startedAt <= s.startedAt ? entry.startedAt : (s.startedAt ?? entry.startedAt);
-    addBudget(entry.spent, s.request?.own ?? budgetDelta(s.budget ?? {}, zeroCounters()));
+    addBudget(entry.spent, ownSpend(s));
     requests.set(id, entry);
   }
   return { requests: [...requests.values()], legacy };
@@ -234,7 +272,7 @@ export async function listRuns(project, { offset = 0, limit = 20, now = Date.now
       finished: runFinished(s, now),
       status: s.reported ? 'reported' : s.request?.finishedAt ? 'ended' : runFinished(s, now) ? 'expired' : 'active',
       used: totals(s.budget?.used), groups: groups(s.budget?.groups),
-      ownUsed: totals((s.request?.own ?? budgetDelta(s.budget ?? {}, s.request?.baselineBudget ?? zeroCounters())).used)
+      ownUsed: totals(ownSpend(s).used)
     })),
     requests: ledger.requests.filter(r => ids.has(r.requestId)).map(r => ({
       requestId: r.requestId, runs: r.runs, startedAt: r.startedAt,
@@ -335,6 +373,31 @@ function mergeClosure(old, incoming) {
   old.closure = live.length ? live[live.length - 1] : null;
   old.closures = list;
 }
+// The posting's body is a document, not a claim about one fact: the primary
+// page and an inventory's summary are two texts of one posting. Both are
+// kept — the primary document governs, whichever order they arrive in — and
+// they are not reported as a contradiction about one field.
+function mergeBodies(old, incoming) {
+  const oldFact = old.fields?.duties, newFact = incoming.fields?.duties;
+  const all = [];
+  const add = (value, kind, source, quote) => {
+    if (value == null || value === '') return;
+    if (all.some(b => b.value === value)) return;
+    all.push({ value, kind: kind ?? 'other', source, quote });
+  };
+  for (const body of [...(old.bodies ?? []), ...(incoming.bodies ?? [])]) add(body.value, body.kind, body.source, body.quote);
+  add(oldFact?.value, oldFact?.bodyKind, oldFact?.source, oldFact?.quote);
+  add(newFact?.value, newFact?.bodyKind, newFact?.source, newFact?.quote);
+  if (!all.length) return;
+  const rank = body => (body.kind === 'page' ? 2 : body.kind === 'inventory' ? 1 : 0);
+  const governing = [...all].sort((a, b) => (rank(b) - rank(a)) || (b.value.length - a.value.length)
+    || String(a.source?.url ?? '').localeCompare(String(b.source?.url ?? '')))[0];
+  const chosen = governing.value === oldFact?.value ? oldFact : governing.value === newFact?.value ? newFact
+    : { value: governing.value, source: governing.source, quote: governing.quote ?? governing.value };
+  old.fields.duties = { ...chosen, bodyKind: governing.kind };
+  old.bodies = all.filter(b => b.value !== governing.value).map(b => ({ value: b.value, kind: b.kind, source: b.source }));
+}
+
 export function mergeInto(old, incoming) {
   for (const [name, value] of Object.entries(incoming.ids ?? {})) {
     if (value == null || value === '') continue;
@@ -344,9 +407,11 @@ export function mergeInto(old, incoming) {
     }
   }
   for (const name of Object.keys(incoming.fields ?? {})) {
+    if (name === 'duties') continue;
     const conflict = mergeField(old, incoming, name);
     if (conflict) old.conflicts.push(conflict);
   }
+  mergeBodies(old, incoming);
   mergeClosure(old, incoming);
   if ((READ_RANK[incoming.readState] ?? 0) > (READ_RANK[old.readState] ?? 0)) old.readState = incoming.readState;
   if (incoming.authority === 'registered-official' && old.authority !== 'registered-official') old.authority = 'registered-official';
@@ -468,7 +533,13 @@ export async function details(state, reader, ids) {
       const gaps = missingFields(r);
       const attempts = (r.detailAttempts ?? 0) + 1;
       r.detailAttempts = attempts;
-      if (gaps.length) await readDetail(r, reader, { gaps });
+      // The employer's own page is the primary document. An inventory that
+      // filled every field is not a reason to leave that page unread: the
+      // page can state a closing value, a publication date or a fact the
+      // inventory does not carry, and a page that was read is never ignored.
+      const page = canonicalLocal(r.detailUrl ?? r.canonicalUrl);
+      const pageRead = r.primaryRead && canonicalLocal(r.primaryRead.url) === page;
+      if (gaps.length || !pageRead) await readDetail(r, reader, { gaps });
       else r.detailNote = 'Reused complete current-run evidence; no duplicate detail request';
       r.gaps = missingFields(r);
       const transient = TRANSIENT_ERROR.test(r.detailError ?? '');
@@ -696,6 +767,13 @@ export async function verifyApplication(record, reader) {
   for (const url of urls.slice(0, 3)) {
     try {
       const response = await reader.get(url, 'application', chargeSourceFor(record, url));
+      // The employer's own page is evaluated as it is read. A contrary fact
+      // on the page that was just read — a validity window that has passed,
+      // a field the inventory filled differently — is not ignored, even when
+      // the inventory had already supplied every field.
+      if (response.status === 200 && canonicalLocal(response.url) === canonicalLocal(record.detailUrl ?? record.canonicalUrl)) {
+        applyPageClaims(record, response);
+      }
       // A page that states the posting is closed offers no route: the entry
       // exists, but the vacancy behind it is gone.
       const closed = ROUTE_CLOSED.exec(textOf(response.body));
@@ -731,6 +809,10 @@ export async function verifyApplication(record, reader) {
 }
 // Verification order: jobs whose hard conditions already pass first, then a
 // small number of high-value unknowns. Unverified jobs are never promoted.
+// A record whose state is already known to be terminal never enters the plan:
+// an identity anomaly, an excluded opportunity kind or any other state the
+// report does not promote spends no application budget at all.
+const PROMOTABLE_CATEGORIES = new Set(['ready', 'check', 'pool', 'unresolved']);
 export function applicationPlan(state, judgments, exclusions, now, budget) {
   const fitOf = r => judgments.find(j => j.recordId === r.recordId)?.fit;
   // An employer channel is not a vacancy: verifying an application route for it
@@ -744,8 +826,13 @@ export function applicationPlan(state, judgments, exclusions, now, budget) {
     const unknowns = checks.filter(c => c.status === 'unknown' && !c.advisory).length;
     const fit = fitOf(r);
     const rank = conflicts ? 3 : unknowns === 0 ? 0 : fit === 'strong' ? 1 : 2;
-    return { record: r, rank, fit };
-  });
+    // The same decision the report will make about this record, so the plan
+    // never buys a verification for a record that cannot be promoted: an
+    // identity anomaly, an excluded opportunity kind and every other
+    // terminal state are decided before the budget is spent.
+    const category = classify(r, state.config, judgment, now).category;
+    return { record: r, rank, fit, category };
+  }).filter(s => PROMOTABLE_CATEGORIES.has(s.category));
   const ready = scored.filter(s => s.rank === 0 && s.fit && s.fit !== 'weak');
   const strong = scored.filter(s => s.rank === 1);
   const others = scored.filter(s => s.rank === 2 && s.fit && s.fit !== 'weak');
@@ -763,14 +850,18 @@ export function validateJudgments(input, state) {
     seen.add(j.recordId);
     if (!['strong', 'possible', 'weak'].includes(j.fit) || !Array.isArray(j.reasons) || !j.reasons.length || j.reasons.some(x => typeof x !== 'string' || x.length > 1000)) throw new Error('fit: strong|possible|weak; reasons: nonempty text array');
     if (j.reasons.some(x => /\p{Script=Han}/u.test(x))) throw new Error(`Judgment reasons for ${j.recordId} must be written in English; preserve source-language text only in quotes`);
-    if (!Array.isArray(j.quotes) || !j.quotes.length || j.quotes.some(q => typeof q !== 'string' || q.length < 8 || !(record.fields.duties?.value ?? '').includes(q))) throw new Error('quotes must be exact excerpts from this record duties; model cannot fabricate supporting evidence');
+    // A quotation is checked against every text the posting was read from:
+    // a declaration that only the employer's own page carries is still the
+    // posting's own text.
+    const corpus = quoteCorpus(record);
+    if (!Array.isArray(j.quotes) || !j.quotes.length || j.quotes.some(q => typeof q !== 'string' || q.length < 8 || !corpus.includes(q))) throw new Error('quotes must be exact excerpts from this record duties; model cannot fabricate supporting evidence');
     // A disqualifier is a pointer, not a fact: the quotation must be the
     // posting's own text, and the runtime verifies what it states.
     if (j.disqualifiers != null) {
       if (!Array.isArray(j.disqualifiers)) throw new Error(`disqualifiers for ${j.recordId} must be an array`);
       for (const d of j.disqualifiers) {
         if (!d || typeof d !== 'object' || !DISQUALIFIER_KINDS.includes(d.kind)) throw new Error(`disqualifier kind must be one of ${DISQUALIFIER_KINDS.join(', ')}`);
-        if (typeof d.quote !== 'string' || d.quote.length < 8 || !(record.fields.duties?.value ?? '').includes(d.quote)) throw new Error('disqualifier quote must be an exact excerpt from this record duties');
+        if (typeof d.quote !== 'string' || d.quote.length < 8 || !corpus.includes(d.quote)) throw new Error('disqualifier quote must be an exact excerpt from this record duties');
       }
     }
   }
@@ -780,7 +871,13 @@ export function excluded(record, exclusions) {
   for (const e of exclusions ?? []) {
     try {
       const ids = { requisition: e.requisitionId ?? e.ids?.requisition ?? null, advertisement: e.ids?.advertisement ?? null, platformJob: e.ids?.platformJob ?? null };
-      const old = { fields: { employer: { value: e.employer } }, ids, aliases: (e.url ? [e.url] : e.aliases ?? []).map(canonicalLocal).filter(Boolean), provider: e.provider ?? 'external', account: e.account ?? '' };
+      const old = { fields: { employer: { value: e.employer } }, ids,
+        // A saved decision names the posting it was made on and the addresses
+        // that posting is known by. Both are the same posting, so both are
+        // matched: a record that moved to a new address is still the one the
+        // user already decided about.
+        aliases: [...(e.url ? [e.url] : []), ...(e.aliases ?? [])].map(canonicalLocal).filter(Boolean),
+        provider: e.provider ?? 'external', account: e.account ?? '' };
       // A confirmed, different requisition number is a different vacancy and is not excluded.
       if (ids.requisition && record.ids?.requisition && key(ids.requisition) !== key(record.ids.requisition)) continue;
       if (sameIdentity(record, old)) return e;
@@ -788,18 +885,68 @@ export function excluded(record, exclusions) {
   }
   return undefined;
 }
-export async function inRun(project, id, action, request) {
+export async function inRun(project, id, action, request, options = {}) {
   const root = await rootAt(project);
   return locked(root, id, async (state, folder) => {
     if (state.reported) throw new Error('This run already produced its immutable report; start a new incremental run');
     // A finished run takes no further calls: it cannot spend behind the back
     // of the next run of the same request.
     if (state.request?.finishedAt) throw new Error('This run has been ended; start a new run of the request');
-    const result = await action(state, new Reader(root, folder, state, request), root, folder);
-    // What this run spent on its own, apart from what the request had already
-    // spent before it started. The next run of the same request counts this.
-    if (state.request?.baselineBudget) state.request.own = budgetDelta(state.budget, state.request.baselineBudget);
-    return result;
+    // A run belongs to the runtime that created it. Reading a run's records
+    // or closing it stays possible, because neither changes its evidence, but
+    // a command that reads pages, judges or reports under a different
+    // implementation would mix two parsers in one conclusion.
+    const running = await implementationIdentity();
+    const stored = state.implementation ?? state.request?.implementation ?? null;
+    let mismatch = null;
+    if (!stored || !sameImplementation(stored, running)) {
+      mismatch = { stored, running };
+      if (!options.readOnly && !options.closing) {
+        const refused = stored ? incompatibilityMessage(stored, running) : unpinnedRunMessage(running);
+        if (!options.allowImplementationChange) throw new Error(refused);
+        state.implementationChanges = [...(state.implementationChanges ?? []), { from: stored ?? { version: null, hash: null, unknown: true }, to: running, at: new Date().toISOString() }];
+      }
+    }
+    try {
+      const result = await action(state, new Reader(root, folder, state, request), root, folder);
+      if (mismatch && options.annotate && result && typeof result === 'object' && !Array.isArray(result)) {
+        return { ...result, implementationMismatch: {
+          createdBy: describeImplementation(mismatch.stored), running: describeImplementation(mismatch.running),
+          note: 'This run was read under a different runtime. Its evidence was not re-read and its earlier report was not rewritten.' } };
+      }
+      return result;
+    } finally {
+      // What this run spent on its own, apart from what the request had
+      // already spent before it started. It is recorded even when the command
+      // failed: the calls were billed, and the next run of the same request
+      // must inherit them. The run state is saved by the lock afterwards, so
+      // the saved run carries the same number.
+      if (state.request?.baselineBudget) state.request.own = ownSpend(state);
+    }
   });
 }
 export { idKeys, SOURCES };
+
+// Inspecting and recovering the locks of a project. A lock is only removed
+// when it cannot belong to a running command: the lock of a live process is
+// never touched, and a lock without a usable PID is only removed after its
+// grace period, or when the caller asks for it explicitly. Nothing else in
+// the project is read or removed: the recovery is about locks only.
+export async function recoverLock(project, { force = false, run = null } = {}) {
+  const root = await rootAt(project);
+  const targets = [{ kind: 'start', lock: join(root, '.nz-job-scout', 'requests', 'start.lock') }];
+  if (run) targets.push({ kind: 'command', lock: join(runPath(root, validRun(run)), 'command.lock') });
+  const results = [];
+  for (const target of targets) {
+    const info = await lstat(target.lock).catch(e => { if (e.code !== 'ENOENT') throw e; });
+    if (!info) { results.push({ ...target, present: false, removed: false, reason: 'no lock file is present' }); continue; }
+    if (info.isSymbolicLink()) { results.push({ ...target, present: true, removed: false, reason: 'the lock path is a symbolic link; it was not followed and not removed' }); continue; }
+    const verdict = await lockRemovable(target.lock, { force });
+    if (verdict.remove) {
+      await unlink(target.lock).catch(() => {});
+      results.push({ ...target, present: true, removed: true, pid: verdict.status.pid, ageMs: verdict.status.ageMs, reason: verdict.reason });
+    } else results.push({ ...target, present: true, removed: false, pid: verdict.status.pid, ageMs: verdict.status.ageMs, reason: verdict.reason });
+  }
+  return { project: root, force, recovered: results.some(r => r.removed), results,
+    note: 'Locks only. A lock of a live process is never removed; a lock without a usable PID is removed after its grace period, or on explicit request with --force.' };
+}

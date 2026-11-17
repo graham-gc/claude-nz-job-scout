@@ -132,6 +132,11 @@ export function countDetail(state, source) {
 export const networkSpent = state => state.networkSpentMs ?? 0;
 
 const TRANSIENT = /timeout|socket hang up|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ETIMEDOUT|network|5\d\d/;
+// A server error is a temporary answer from a working server: the request
+// reached the host and the host refused to answer for now. It is not a
+// restriction, so it may be asked again, and it is not a final answer, so it
+// must not be kept as one.
+export const isTransientStatus = status => Number.isInteger(status) && status >= 500 && status <= 599;
 
 export class Reader {
   constructor(root, folder, state, request = requestPublic) { Object.assign(this, { root, folder, state, request }); }
@@ -166,6 +171,11 @@ export class Reader {
   // never applied. And it must not run out of hops one request before the
   // file that holds the rules: the budget counts redirects followed, not
   // requests made, so five redirects still leave room for the final read.
+  //
+  // The target of a redirect is followed as it is given. It is never replaced
+  // by a guess at another URL: a target that was never read is a target whose
+  // rules were never applied, and an unexamined target must not be reported
+  // as an absent file.
   async robotsFor(u, stage, source) {
     const MAX_REDIRECTS = 5;
     let target = new URL('/robots.txt', u.origin);
@@ -183,10 +193,15 @@ export class Reader {
       redirects++;
       let next;
       try { next = publicUrl(new URL(location, target).href); } catch { break; }
-      // A redirect to the site root names the canonical host: the file is read
-      // there. Any other path is followed as it is given — the rules may live
-      // under a name of the site's own choosing.
-      if (next.pathname === '/' || next.pathname === '') next = new URL('/robots.txt', next.origin);
+      // A redirect may name the site root. The root is read as it is given:
+      // a site may publish its rules there as plain text, and those rules are
+      // the ones that apply. When the root carries no rules, the site's own
+      // file is the authority and is read there.
+      if (next.pathname === '/' || next.pathname === '') {
+        const hosted = await this.rulesAt(next, stage, source);
+        if (hosted) return hosted;
+        next = new URL('/robots.txt', next.origin);
+      }
       target = next;
     }
     // The chain ended without a readable file. No robots file is not a
@@ -195,6 +210,16 @@ export class Reader {
     // with their real status.
     if (response) return { ...response, status: 404, body: '' };
     return { status: 404, headers: {}, body: '' };
+  }
+  // A rules file is plain text with directives in it. A page that answers a
+  // redirect is not a set of rules, so a root that serves an ordinary page
+  // leaves the site's own file as the authority.
+  async rulesAt(target, stage, source) {
+    let response = null;
+    try { response = await this.once(target.href, stage, source, 'robots'); } catch { return null; }
+    const type = String(response.headers?.['content-type'] ?? '').toLowerCase();
+    if (type.includes('text/html') || type.includes('xhtml')) return null;
+    return /^\s*user-agent\s*:/im.test(String(response.body ?? '')) ? response : null;
   }
   async get(value, stage, source, depth = 0) {
     const u = publicUrl(value); u.hash = '';
@@ -237,13 +262,25 @@ export class Reader {
       this.state.cache[url] = final.snapshot;
       return final;
     }
-    this.state.cache[url] = response.snapshot;
+    // A server error is not a final answer, so it is not kept as one. Caching
+    // it would make the bounded retry read the same failure from disk instead
+    // of asking the server again.
+    if (!isTransientStatus(response.status)) this.state.cache[url] = response.snapshot;
     return response;
   }
   // One bounded retry for transient network failures. Restrictions are never retried.
   async fetchWithRetry(url, stage, source, attempt = 0) {
     try {
-      return await this.once(url, stage, source);
+      const response = await this.once(url, stage, source);
+      // A server error is a temporary answer too, and it is recorded as one so
+      // that the log shows what happened. The request is not repeated here:
+      // the bounded retry of the record asks the server again, and that retry
+      // is counted as the attempt it is.
+      if (isTransientStatus(response.status)) {
+        const item = this.state.attempts[this.state.attempts.length - 1];
+        if (item) { item.outcome = 'transient-status'; item.reason = `HTTP ${response.status}`; }
+      }
+      return response;
     } catch (error) {
       const transient = TRANSIENT.test(error.message);
       if (!transient || attempt >= 1) throw error;

@@ -59,31 +59,93 @@ export async function staleLock(lock) {
   if (pid === process.pid) return false;
   try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; }
 }
-export async function locked(root, id, action) {
-  const folder = runPath(root, id), file = join(folder, 'run.json'), lock = join(folder, 'command.lock');
-  await guard(root, lock);
-  let handle;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      handle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      break;
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      if (attempt === 0 && await staleLock(lock)) { await unlink(lock).catch(() => {}); continue; }
-      throw new Error('Run is locked by another command; do not run commands concurrently');
-    }
+// A lock is written with its payload already inside it, so a lock file that
+// cannot name its owner is a leftover of a command that was interrupted
+// before it could record itself. Such a lock cannot be attributed to a
+// process, so its age decides: it is left alone for a short grace period and
+// recovered after that. The grace period is short because the window in
+// which a lock exists without its payload is the moment between creating the
+// file and writing it, which is why the payload is linked into place instead.
+export const INCOMPLETE_LOCK_GRACE_MS = 10_000;
+async function alive(pid) {
+  if (pid === process.pid) return true;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; }
+}
+// What a lock file says about its owner: a PID and whether that process is
+// still running, and how long the lock has been there.
+export async function lockStatus(lock) {
+  const data = await readJson(lock, null).catch(() => null);
+  const pid = Number(data?.pid);
+  const usable = Number.isInteger(pid) && pid > 0;
+  const ageMs = await lstat(lock).then(s => Math.max(0, Date.now() - s.mtimeMs)).catch(() => null);
+  return { lock, pid: usable ? pid : null, live: usable ? await alive(pid) : null, ageMs, complete: usable };
+}
+// Whether a lock may be removed, and why. The lock of a live process is never
+// removed. A lock whose owner has exited is removed. A lock without a usable
+// PID is removed only once it has been incomplete for longer than the grace
+// period, or when the caller asks for it explicitly.
+export async function lockRemovable(lock, { graceMs = INCOMPLETE_LOCK_GRACE_MS, force = false } = {}) {
+  const status = await lockStatus(lock);
+  if (status.pid != null) {
+    if (status.live) return { remove: false, status, reason: `the lock belongs to the live process ${status.pid}` };
+    return { remove: true, status, reason: `the process ${status.pid} that owned the lock has exited` };
   }
+  if (status.ageMs == null) return { remove: false, status, reason: 'the lock file cannot be read' };
+  if (!force && status.ageMs < graceMs) return { remove: false, status, reason: `the lock carries no PID and is only ${Math.round(status.ageMs / 1000)}s old` };
+  return { remove: true, status, reason: force
+    ? 'the lock carries no PID and was removed on explicit request'
+    : `the lock carries no PID and is older than the ${Math.round(graceMs / 1000)}s grace period` };
+}
+// A lock is removed only when it is a real file: a symbolic link at the lock
+// path is never followed and never removed.
+async function removeLock(lock) {
+  const info = await lstat(lock).catch(e => { if (e.code !== 'ENOENT') throw e; });
+  if (!info || info.isSymbolicLink()) return false;
+  await unlink(lock).catch(() => {});
+  return true;
+}
+// The lock is released by path, but only while it still carries our own PID:
+// a lock that was taken over in the meantime belongs to somebody else.
+async function releaseLock(lock) {
+  const data = await readJson(lock, null).catch(() => null);
+  if (Number(data?.pid) !== process.pid) return;
+  await removeLock(lock);
+}
+// The lock is created with its payload already inside it. A lock file that
+// cannot name its owner can never be told apart from a live one, so the
+// payload is written to a temporary file and linked into place. The link
+// fails when the lock is already taken, so the exclusion stays atomic.
+async function createLock(lock) {
+  const temp = `${lock}.${randomUUID()}.tmp`;
+  const handle = await open(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
   try {
     await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }) + '\n');
     await handle.sync();
-  } catch { /* the lock itself is the mutual exclusion; its payload is advisory */ }
+  } finally { await handle.close(); }
+  try { await link(temp, lock); }
+  finally { await unlink(temp).catch(() => {}); }
+}
+export async function locked(root, id, action) {
+  const folder = runPath(root, id), file = join(folder, 'run.json'), lock = join(folder, 'command.lock');
+  await guard(root, lock);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await createLock(lock); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const verdict = await lockRemovable(lock);
+      if (attempt === 0 && verdict.remove) { await removeLock(lock); continue; }
+      throw new Error(verdict.status.pid == null
+        ? `The run lock carries no usable PID (${verdict.reason}); it may be a leftover of an interrupted command. Retry in a few seconds, or inspect it with "nz-job-scout recover-lock --project ${root} --run ${id}".`
+        : 'Run is locked by another command; do not run commands concurrently');
+    }
+  }
   try {
     await guard(root, file);
     const state = await readJson(file);
     if (state.id !== id || state.schema !== 1) throw new Error('Invalid run state');
     try { return await action(state, folder); }
     finally { await put(root, file, state, { replace: true }); }
-  } finally { await handle.close(); await unlink(lock); }
+  } finally { await releaseLock(lock); }
 }
 // Starting a run is serialized per project. The request id may still be
 // undecided when a start begins — two commands that both see "no request yet"
@@ -96,22 +158,19 @@ export async function startLock(root, action) {
   await mkdir(folder, { recursive: true });
   const lock = join(folder, 'start.lock');
   await guard(root, lock);
-  let handle;
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      handle = await open(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      break;
-    } catch (e) {
+    try { await createLock(lock); break; }
+    catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      if (attempt === 0 && await staleLock(lock)) { await unlink(lock).catch(() => {}); continue; }
-      throw new Error('A run is being started by another command; do not run start concurrently');
+      const verdict = await lockRemovable(lock);
+      if (attempt === 0 && verdict.remove) { await removeLock(lock); continue; }
+      throw new Error(verdict.status.pid == null
+        ? `The start lock carries no usable PID (${verdict.reason}); it may be a leftover of an interrupted start. Retry in a few seconds, or inspect it with "nz-job-scout recover-lock --project ${root}".`
+        : 'A run is being started by another command; do not run start concurrently');
     }
   }
-  try { await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }) + '\n'); await handle.sync(); }
-  catch { /* the lock itself is the mutual exclusion; its payload is advisory */ }
-  finally { await handle.close(); }
   try { return await action(); }
-  finally { await unlink(lock).catch(() => {}); }
+  finally { await releaseLock(lock); }
 }
 // Every run this project has opened, newest last. The request ledger is read
 // from these files, so the ceiling of a request survives a restart.

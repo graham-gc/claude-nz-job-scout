@@ -3,6 +3,19 @@
 // Only what this runtime needs: the group that matches the agent, Allow and
 // Disallow rules with '*' and '$' wildcards, and longest-match precedence.
 
+// RFC 9309 2.2.2: a percent-encoded octet that stands for an unreserved
+// character names the same path as the character itself. /%6Aobs/123 is
+// therefore /jobs/123, and a rule about /jobs covers both spellings. The
+// remaining escapes are kept, because they stand for reserved characters
+// that do change the path.
+const UNRESERVED = /[A-Za-z0-9\-._~]/;
+export function normalizePath(value) {
+  return String(value ?? '').replace(/%([0-9A-Fa-f]{2})/g, (whole, hex) => {
+    const ch = String.fromCharCode(parseInt(hex, 16));
+    return UNRESERVED.test(ch) ? ch : '%' + hex.toUpperCase();
+  });
+}
+
 function matchPattern(pattern, path) {
   // '*' matches any sequence, '$' at the end anchors the end of the path.
   let re = '';
@@ -42,7 +55,9 @@ export function parseRobots(text) {
 
 export function isAllowed(url, agent, body) {
   let path;
-  try { const u = new URL(url); path = `${u.pathname}${u.search}`; } catch { return false; }
+  // The path is compared in its normalised form, so that a rule cannot be
+  // stepped around by writing the same path in another encoding.
+  try { const u = new URL(url); path = normalizePath(`${u.pathname}${u.search}`); } catch { return false; }
   const groups = parseRobots(body);
   const wanted = String(agent ?? '').toLowerCase();
   const exact = groups.filter(g => g.agents.some(a => a !== '*' && wanted.includes(a)));
@@ -51,9 +66,10 @@ export function isAllowed(url, agent, body) {
   let best = null;
   for (const group of chosen) {
     for (const rule of group.rules) {
-      if (!matchPattern(rule.pattern, path)) continue;
-      const length = rule.pattern.replace(/[*$]/g, '').length;
-      if (!best || length > best.length || (length === best.length && rule.allow && !best.allow)) best = { ...rule, length };
+      const pattern = normalizePath(rule.pattern);
+      if (!matchPattern(pattern, path)) continue;
+      const length = pattern.replace(/[*$]/g, '').length;
+      if (!best || length > best.length || (length === best.length && rule.allow && !best.allow)) best = { ...rule, pattern, length };
     }
   }
   if (!best) return true;

@@ -1,7 +1,7 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
-import { channelKind, closureBoundToAdvertisement, fieldIsEmployerPosting, isEmployerPosting, publicationDateIn, readDate, statedFacts, PUBLICATION_RANK, PUBLICATION_SEMANTICS } from './evidence.mjs';
-import { foreignScope, isForeignPlace, nzLocality, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
+import { channelKind, closureBoundToAdvertisement, fieldIsEmployerPosting, isEmployerPosting, publicationDateIn, quoteCorpus, readDate, statedFacts, PUBLICATION_RANK, PUBLICATION_SEMANTICS } from './evidence.mjs';
+import { foreignScope, isForeignPlace, mentionsCity, nzLocality, nzPlace, remoteScope, REMOTE_ONLY, workLocations } from './places.mjs';
 import { aucklandInstant, looksLikeTimestamp, momentDay, nzClock, nzDay, parseMoment, parseNumeric } from './dates.mjs';
 
 export const nzDate = value => nzDay(value);
@@ -10,6 +10,7 @@ const dayNumber = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
 const fields = new Set(['location', 'workArrangement', 'hoursPerWeek', 'engagement', 'contractType', 'duration', 'durationWeeks', 'durationMonths', 'startAt', 'endAt', 'workRights']);
 export function criteria(input) {
   if (!input || !Array.isArray(input.roleFamilies) || !input.roleFamilies.length || input.roleFamilies.some(x => typeof x !== 'string' || !x.trim())) throw new Error('roleFamilies must contain the requested role families');
+  validateRequest(input);
   const disclosures = [];
   const location = input.location ?? { country: 'New Zealand', onsiteCities: [], remoteOutside: true };
   if (!input.location) disclosures.push('No location supplied: the region is evaluated at country level (New Zealand), without assuming a city. Supply onsiteCities for city-level matching.');
@@ -32,6 +33,47 @@ export function criteria(input) {
   return result;
 }
 export const contextHash = (criteria, resumeHash) => hash({ criteria, resumeHash });
+
+// The shape of the request is checked before a run exists and before any
+// budget is touched. A request that carries the wrong shape is refused with a
+// message that names the field: a wrong shape would otherwise be read as a
+// different request — "remoteOutside": "false" would widen the request, and a
+// string of preferences would be read character by character.
+const isPlainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const optionalString = (value, field) => { if (value !== undefined && typeof value !== 'string') throw new Error(`${field} must be a string`); };
+const optionalBoolean = (value, field) => { if (value !== undefined && typeof value !== 'boolean') throw new Error(`${field} must be true or false`); };
+// A saved decision names the posting it was made on. The fields are the ones
+// the exclusion reader uses; nothing else is accepted.
+const EXCLUSION_FIELDS = ['employer', 'title', 'url', 'requisitionId', 'decision', 'provider', 'account'];
+function validateExclusion(entry, index) {
+  if (!isPlainObject(entry)) throw new Error(`exclusions[${index}] must be a saved-decision object`);
+  for (const field of EXCLUSION_FIELDS) optionalString(entry[field], `exclusions[${index}].${field}`);
+  if (entry.aliases !== undefined && (!Array.isArray(entry.aliases) || entry.aliases.some(a => typeof a !== 'string'))) throw new Error(`exclusions[${index}].aliases must be a list of URLs`);
+  if (entry.ids !== undefined && !isPlainObject(entry.ids)) throw new Error(`exclusions[${index}].ids must be an object`);
+  if (!EXCLUSION_FIELDS.some(field => field !== 'decision' && entry[field]) && !entry.aliases?.length && !entry.ids) {
+    throw new Error(`exclusions[${index}] must name the posting it is about (employer, title, url or requisitionId)`);
+  }
+}
+export function validateRequest(input) {
+  if (!isPlainObject(input)) throw new Error('The request must be a JSON object');
+  if (input.location !== undefined) {
+    if (!isPlainObject(input.location)) throw new Error('location must be an object with country, onsiteCities and remoteOutside');
+    optionalString(input.location.country, 'location.country');
+    if (input.location.onsiteCities !== undefined && (!Array.isArray(input.location.onsiteCities) || input.location.onsiteCities.some(c => typeof c !== 'string' || !c.trim()))) throw new Error('location.onsiteCities must be a list of city names (may be empty)');
+    optionalBoolean(input.location.remoteOutside, 'location.remoteOutside');
+  }
+  optionalBoolean(input.includeTalentPools, 'includeTalentPools');
+  optionalString(input.requestId, 'requestId');
+  if (input.preferences !== undefined && (!Array.isArray(input.preferences) || input.preferences.some(p => typeof p !== 'string' || !p.trim()))) {
+    throw new Error('preferences must be a list of preference phrases');
+  }
+  if (input.exclusions !== undefined) {
+    if (!Array.isArray(input.exclusions)) throw new Error('exclusions must be a list of saved decisions');
+    input.exclusions.forEach(validateExclusion);
+  }
+  if (input.all !== undefined && !Array.isArray(input.all)) throw new Error('all is a list of conditions');
+  if (input.any !== undefined && (!Array.isArray(input.any) || input.any.some(g => !Array.isArray(g)))) throw new Error('any is a list of alternative condition lists');
+}
 const verdict = (name, status, detail) => ({ name, status, detail });
 
 // Duration keeps its own unit. Weeks are never converted into months, or months into weeks.
@@ -64,12 +106,34 @@ export function condition(record, c) {
 // only "Remote" has not stated where it hires, so it stays unknown. A remote
 // posting that names its own scope ("Remote (US)", "Remote, Latin America")
 // has stated where it hires too.
+//
+// A posting may name more than one place it hires from. Those are
+// alternatives, not a single place: a role offered in Auckland and in Sydney
+// can be worked in Auckland, so one permitted alternative is enough. Each
+// alternative is judged on its own, and the alternatives are only a conflict
+// when every one of them is a conflict.
 export function locationVerdict(record, config) {
-  const location = (record.fields.location?.value ?? '').trim();
+  const raw = (record.fields.location?.value ?? '').trim();
   const arrangement = record.fields.workArrangement?.value;
+  if (!raw) return verdict('Location', 'unknown', 'Job location not stated/read');
+  const alternatives = workLocations(raw);
+  const judged = alternatives.map(alt => oneLocation(alt, config, arrangement));
+  if (alternatives.length === 1) return judged[0];
+  const match = judged.find(v => v.status === 'satisfied');
+  if (match) return verdict('Location', 'satisfied', `${match.detail} (the posting names these work locations: ${alternatives.join(' | ')})`);
+  if (judged.every(v => v.status === 'conflict')) {
+    return verdict('Location', 'conflict', `None of the stated work locations is in the requested cities (${(config.location.onsiteCities ?? []).join(', ') || config.location.country}): ${alternatives.join(' | ')}`);
+  }
+  return verdict('Location', 'unknown', `The stated work locations do not settle whether the role is in ${(config.location.onsiteCities ?? []).join(', ') || config.location.country}: ${alternatives.join(' | ')}`);
+}
+
+// One named work location, judged on its own.
+function oneLocation(location, config, arrangement) {
   if (!location) return verdict('Location', 'unknown', 'Job location not stated/read');
-  if (isForeignPlace(location)) return verdict('Location', 'conflict', `Location outside New Zealand: ${location}`);
-  if (REMOTE_ONLY.test(location)) return verdict('Location', 'unknown', `Remote only; the posting does not state whether the employer hires in ${config.location.country}`);
+  // A remote posting that names its own hiring scope is judged on that scope:
+  // the places it names say where the employer hires. The scope is read
+  // before the plain place names, because a scope may name more than one
+  // country: "Remote (New Zealand and Australia)" hires in New Zealand.
   const scope = remoteScope(location);
   if (scope) {
     if (nzPlace(scope)) return verdict('Location', 'satisfied', `${location}; remote work covers ${scope}`);
@@ -77,11 +141,15 @@ export function locationVerdict(record, config) {
     if (outside) return verdict('Location', 'conflict', `Remote work is limited to ${scope}; it does not cover ${config.location.country}`);
     return verdict('Location', 'unknown', `Remote scope "${scope}" is not a recognised hiring region; treated as unknown, not as a match`);
   }
+  if (REMOTE_ONLY.test(location)) return verdict('Location', 'unknown', `Remote only; the posting does not state whether the employer hires in ${config.location.country}`);
+  if (isForeignPlace(location)) return verdict('Location', 'conflict', `Location outside New Zealand: ${location}`);
   if (!nzPlace(location)) return verdict('Location', 'unknown', `Region not parsed from "${location}"; treated as unknown, not as a match`);
   const cities = config.location.onsiteCities ?? [];
   if (!cities.length) return verdict('Location', 'satisfied', `In ${config.location.country} and no specific city was requested: ${location}`);
-  const inCity = cities.some(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}\\b`, 'i').test(location));
-  if (inCity) return verdict('Location', 'satisfied', location);
+  // A suburb of the requested city is that city: the locality hierarchy
+  // places it, so it is not a conflict just because it does not repeat the
+  // city name.
+  if (cities.some(c => mentionsCity(location, c))) return verdict('Location', 'satisfied', location);
   if (arrangement === 'remote' && config.location.remoteOutside) return verdict('Location', 'satisfied', `${location}; role is stated as remote and remote work is allowed`);
   // The country alone says where the employer hires, not in which city:
   // "Aotearoa" does not prove "not in Auckland", so it stays unknown.
@@ -391,9 +459,12 @@ export function hardChecks(record, config, now) {
 export const DISQUALIFIER_KINDS = ['publication-outside-window', 'engagement-outside-availability'];
 export function verifyDisqualifiers(record, config, judgment, now) {
   const verified = [];
-  const duties = record.fields.duties?.value ?? '';
+  // A quotation is checked against every text the posting was read from: a
+  // declaration that only the employer's own page carries is still the
+  // posting's own text.
+  const corpus = quoteCorpus(record);
   for (const claim of judgment?.disqualifiers ?? []) {
-    if (!claim || typeof claim.quote !== 'string' || !duties.includes(claim.quote)) continue;
+    if (!claim || typeof claim.quote !== 'string' || !corpus.includes(claim.quote)) continue;
     if (claim.kind === 'publication-outside-window') {
       // The reader's own publication date decides when it decided. A
       // quotation fills a gap; it never overrules a fact the run already

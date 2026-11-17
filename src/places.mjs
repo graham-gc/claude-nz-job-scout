@@ -17,10 +17,33 @@ export const NZ_COUNTRY_NAMES = ['new zealand', 'nz', 'aotearoa'];
 
 export const NZ_PLACES = [...NZ_LOCALITIES, ...NZ_COUNTRY_NAMES];
 
+// The localities that belong to a city. A posting that names one of them has
+// stated that city, even when the city name is not written out: "Takapuna,
+// New Zealand" is an Auckland posting. The Auckland list covers Auckland's
+// own suburbs and localities and the northern local-board areas of the
+// Auckland region.
+//
+// A locality that is not listed is not placed at all. The request then stays
+// unknown rather than becoming a conflict: a suburb is never proof that the
+// role is outside the requested city.
+export const CITY_LOCALITIES = {
+  auckland: ['takapuna', 'devonport', 'devonport-takapuna', 'stanley bay', 'north shore', 'northshore', 'orewa', 'red beach', 'silverdale',
+    'whangaparaoa', 'albany', 'glenfield', 'browns bay', 'birkenhead', 'northcote', 'glenorchy', 'new lynn', 'te atatu', 'titirangi',
+    'henderson', 'henderson-massey', 'massey', 'glen eden', 'sunnyvale', 'avondale', 'blockhouse bay', 'kuriwhenua', 'mt eden', 'mount eden',
+    'mt roskill', 'mount roskill', 'mt albert', 'mount albert', 'onehunga', 'newmarket', 'ponsonby', 'parnell', 'herne bay', 'kohimarama',
+    'grey lynn', 'kingsland', 'sandringham', 'royal oak', 'greenlane', 'ellerslie', 'otahuhu', 'mangere', 'mangere-otahuhu', 'papatoetoe',
+    'botany', 'howick', 'east tamaki', 'pakuranga', 'bucklands beach', 'beachlands', 'highland park', 'whitakere', 'westhaven', 'glen innes',
+    'st johns', 'panmure', 'waiheke', 'waiheke island', 'rangitoto', 'motutapu', 'pukekohe', 'waiuku', 'waitakere', 'waitemata',
+    'albert-eden', 'orakei', 'papakura', 'maungakiekie-tamaki', 'whau', 'manukau', 'rodney', 'kaipara'],
+  wellington: ['johnsonville', 'tawa', 'karori', 'khandallah', 'churton park', 'island bay', 'newtown', 'te aro', 'miramar', 'kilbirnie',
+    'seatoun', 'makara', 'wrights hill'],
+  christchurch: ['riccarton', 'hornby', 'bishopdale', 'new brighton', 'addington', 'cashmere', 'redwood', 'bexley', 'moorhouse', 'halswell']
+};
+
 // Countries, states and regions that are outside New Zealand. A posting that
 // names one of them is a location conflict, not an unknown: the posting said
 // where the job is.
-export const FOREIGN_PLACES = ['united states', 'united kingdom', 'england', 'scotland', 'wales', 'ireland', 'australia', 'canada',
+export const FOREIGN_PLACES = ['united states', 'united kingdom', 'england', 'scotland', 'wales', 'ireland', 'australia', 'canada', 'tasmania',
   'singapore', 'germany', 'india', 'china', 'japan', 'france', 'netherlands', 'philippines', 'south africa', 'brazil', 'mexico',
   'italy', 'spain', 'poland', 'sweden', 'norway', 'denmark', 'switzerland', 'austria', 'belgium', 'argentina', 'indonesia',
   'vietnam', 'thailand', 'malaysia', 'uae', 'united arab emirates', 'israel', 'turkey', 'greece', 'portugal', 'finland',
@@ -68,6 +91,30 @@ export const nzPlace = text => placeHit(text, NZ_PLACES);
 export const nzLocality = text => placeHit(text, NZ_LOCALITIES);
 export const nzCountry = text => placeHit(text, NZ_COUNTRY_NAMES);
 export const foreignPlace = text => placeHit(text, FOREIGN_PLACES);
+
+// The city a place name belongs to. A locality of the requested city counts
+// as that city: "Takapuna" is Auckland, so an Auckland request is satisfied
+// by it. A name that belongs to no known city is not placed at all.
+const placeKey = value => tidy(value).toLowerCase();
+export const mentionsCity = (text, city) => {
+  const name = placeKey(city);
+  if (!name) return false;
+  const t = tidy(text);
+  if (!t) return false;
+  if (new RegExp(`(^|[^A-Za-z0-9])${escapeRe(name)}([^A-Za-z0-9]|$)`, 'i').test(t)) return true;
+  for (const locality of CITY_LOCALITIES[name] ?? []) {
+    if (new RegExp(`(^|[^A-Za-z0-9])${escapeRe(locality)}([^A-Za-z0-9]|$)`, 'i').test(t)) return true;
+  }
+  return false;
+};
+
+// A posting may name more than one place it hires from. The reader joins the
+// alternatives it found into one location string, so the string is split
+// back into the distinct work locations it names.
+export const workLocations = text => {
+  const parts = String(text ?? '').split(/\s*\|\s*/).map(part => tidy(part)).filter(Boolean);
+  return parts.length ? parts : [''];
+};
 
 export const usStateCode = text => {
   const m = tidy(text).match(/,\s*([A-Z]{2})\b/);

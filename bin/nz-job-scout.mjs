@@ -4,14 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, isAbsolute } from 'node:path';
 import { readJson, put, rootAt } from '../src/store.mjs';
-import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult, endRun, listRuns, missingFields } from '../src/engine.mjs';
+import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult, endRun, listRuns, missingFields, recoverLock } from '../src/engine.mjs';
 import { produce } from '../src/report.mjs';
+import { implementationIdentity } from '../src/runtime.mjs';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const help = `NZ Job Scout v1 (development)
 All commands run in the target project, not the plugin cache. JSON output only.
   version
   runs [--offset 0] [--limit 20]  (read-only run/request ledger; no --run required)
+  recover-lock [--run RUN_ID] [--force]  (inspect and recover an incomplete lock; locks only)
   start --input request.json --resume /absolute/resume.pdf [--new-request]
   discover --run RUN_ID [--compact]
   index --run RUN_ID [--offset 100] [--compact]
@@ -24,7 +26,10 @@ All commands run in the target project, not the plugin cache. JSON output only.
   report --run RUN_ID --judgments judgments.json
   end --run RUN_ID
 Optional --project /absolute/project on every command. No cleanup, login, shell-fetch,
-plugin installation, application submission or source-editing subcommands.`;
+plugin installation, application submission or source-editing subcommands.
+A run is bound to the runtime that created it: resuming it under another runtime
+is refused unless --allow-implementation-change is given, and the change is then
+recorded and disclosed in the report.`;
 
 // Keep navigation output small without shell redirects, temporary files or
 // formatter pipelines. Full evidence remains in the run and in `record`.
@@ -54,7 +59,8 @@ try {
     project: { type: 'string' }, input: { type: 'string' }, resume: { type: 'string' }, run: { type: 'string' },
     ticket: { type: 'string' }, url: { type: 'string', multiple: true }, error: { type: 'string' },
     record: { type: 'string', multiple: true }, official: { type: 'string' }, judgments: { type: 'string' },
-    offset: { type: 'string' }, limit: { type: 'string' }, compact: { type: 'boolean' }, help: { type: 'boolean' }, 'new-request': { type: 'boolean' },
+    offset: { type: 'string' }, limit: { type: 'string' }, compact: { type: 'boolean' }, help: { type: 'boolean' }, 'new-request': { type: 'boolean' }, force: { type: 'boolean' },
+    'allow-implementation-change': { type: 'boolean' },
   } });
   const command = positionals[0], project = a.project ?? process.cwd();
   if (a.help || !command) { process.stdout.write(help + '\n'); process.exit(0); }
@@ -72,12 +78,18 @@ try {
       manifestVersion: manifest?.version ?? null,
       packageVersion: pkg?.version ?? null,
       consistent: Boolean(manifest?.version && pkg?.version && manifest.version === pkg.version),
+      implementation: await implementationIdentity(pluginRoot),
     };
   }
   else if (command === 'runs') {
     // Inspect even active or finished runs without taking a command lock,
     // creating a run, rewriting evidence, or spending external-call budget.
     result = await listRuns(project, { offset: Number(a.offset ?? 0), limit: Number(a.limit ?? 20) });
+  }
+  else if (command === 'recover-lock') {
+    // Locks only: a lock of a live process is never removed, and nothing but
+    // the lock file of this project is read or written.
+    result = await recoverLock(project, { force: a.force === true, run: a.run ?? null });
   }
   else if (command === 'start') {
     required('input', 'resume');
@@ -86,7 +98,7 @@ try {
     // and the path the caller typed can differ through a symlink.
     const inputPath = isAbsolute(a.input) ? a.input : join(root, a.input);
     const input = await readJson(inputPath);
-    result = await start(project, input, a.resume, { newRequest: a['new-request'] === true });
+    result = await start(project, input, a.resume, { newRequest: a['new-request'] === true, allowImplementationChange: a['allow-implementation-change'] === true });
     // The request id is written back into the request file, so that the
     // continuation runs of this request keep the same id and the same budget
     // without the caller having to carry it.
@@ -126,7 +138,8 @@ try {
         case 'end': return endRun(state);
         default: throw new Error(`Unknown command ${command}; use --help`);
       }
-    });
+    }, undefined, { readOnly: ['index', 'record'].includes(command), closing: command === 'end',
+         annotate: command === 'index', allowImplementationChange: a['allow-implementation-change'] === true });
   }
   process.stdout.write(JSON.stringify(a.compact ? compactOutput(command, result) : result, null, 2) + '\n');
 } catch (e) { process.stderr.write(JSON.stringify({ error: e.message }) + '\n'); process.exitCode = 1; }

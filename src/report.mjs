@@ -3,7 +3,9 @@ import { lstat } from 'node:fs/promises';
 import { readJson, put, reports, hash, runStates } from './store.mjs';
 import { nzDate, classify, DEADLINE_SEMANTICS, hardChecks } from './criteria.mjs';
 import { idKeys } from './evidence.mjs';
-import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger } from './engine.mjs';
+import { mentionsCity } from './places.mjs';
+import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger, ownSpend } from './engine.mjs';
+import { describeImplementation } from './runtime.mjs';
 
 const esc = text => String(text ?? '').replace(/[\[\]<>*_`|]/g, x => `\\${x}`).replace(/\s+/g, ' ').trim();
 // Values are shown in words, never as raw JSON.
@@ -95,33 +97,96 @@ export function leadLabel(record) {
 
 // --- preferences -------------------------------------------------------------
 // Preferences are executable rules over recorded facts. Their basis is stated.
+//
+// A preference that names more than one thing is judged clause by clause:
+// "paid summer internship" asks for an internship that is paid, and the title
+// alone does not answer it. A clause whose evidence was not read leaves the
+// preference unknown: the posting did not say the opposite.
+//
+// A preference never excludes a role. It only orders the roles that the hard
+// conditions already allow.
+const clause = (status, basis) => ({ status, basis });
+// A field that has to carry one value.
+const equalsClause = (record, field, wanted) => {
+  const value = record.fields[field]?.value;
+  if (value == null) return clause('unknown', `${field}=not read`);
+  return clause(value === wanted ? 'satisfied' : 'conflict', `${field}=${value}`);
+};
+// A field that has to be there at all.
+const presentClause = (record, field) => {
+  const value = record.fields[field]?.value;
+  if (value == null) return clause('unknown', `${field}=not read`);
+  return clause('satisfied', `${field}=${value}`);
+};
+const engagementClause = (record, wanted) => {
+  const engagement = record.fields.engagement?.value;
+  if (engagement == null) return clause('unknown', 'engagement=not read');
+  return clause((engagement === 'volunteer') === wanted ? 'satisfied' : 'conflict', `engagement=${engagement}`);
+};
+// Whether the posting says the role is remote.
+const remoteClause = record => {
+  const arrangement = record.fields.workArrangement?.value, location = record.fields.location?.value;
+  if (arrangement === 'remote' || (location != null && /\bremote\b/i.test(location))) {
+    return clause('satisfied', `workArrangement=${arrangement ?? 'not read'}; location=${location ?? 'not read'}`);
+  }
+  if (arrangement != null) return clause('conflict', `workArrangement=${arrangement}; location=${location ?? 'not read'}`);
+  if (location != null) return clause('unknown', `workArrangement=not read; location=${location}`);
+  return clause('unknown', 'workArrangement=not read; location=not read');
+};
+// Whether the title names the role the preference is about.
+const titleClause = record => {
+  const title = record.fields.title?.value ?? record.lead?.title;
+  if (!title) return clause('unknown', 'title=not read');
+  return clause(/intern/i.test(title) ? 'satisfied' : 'conflict', `title=${title}`);
+};
+// Whether the posting says the role is paid. A stated pay status answers it;
+// a stated salary answers it; a stated engagement answers it unless it is a
+// volunteer one. Nothing stated leaves the clause unknown.
+const paidClause = record => {
+  const pay = record.fields.payStatus?.value;
+  if (pay != null) return clause(pay === 'paid' ? 'satisfied' : pay === 'unpaid' ? 'conflict' : 'unknown', `payStatus=${pay}`);
+  const salary = record.fields.salary?.value;
+  if (salary != null) return clause('satisfied', `salary=${salary}`);
+  const engagement = record.fields.engagement?.value;
+  if (engagement != null) return clause(engagement === 'volunteer' ? 'conflict' : 'satisfied', `engagement=${engagement}`);
+  return clause('unknown', 'payStatus=not read; salary=not read; engagement=not read');
+};
+const cityClause = (record, city) => {
+  const location = record.fields.location?.value;
+  if (!location) return clause('unknown', 'location=not read');
+  return clause(mentionsCity(location, city) ? 'satisfied' : 'conflict', `location=${location}`);
+};
+const CITY_RULE = /\b(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|queenstown|palmerston north|new plymouth|whangarei|invercargill)\b/i;
 const PREFERENCE_RULES = [
-  { re: /\bremote\b/i, check: r => r.fields.workArrangement?.value === 'remote' || /\bremote\b/i.test(r.fields.location?.value ?? ''), basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}; location=${r.fields.location?.value ?? 'not read'}` },
-  { re: /\bhybrid\b/i, check: r => r.fields.workArrangement?.value === 'hybrid', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}` },
-  { re: /\bon[\s-]?site\b/i, check: r => r.fields.workArrangement?.value === 'on-site', basis: r => `workArrangement=${r.fields.workArrangement?.value ?? 'not read'}` },
-  { re: /\bpermanent\b/i, check: r => r.fields.contractType?.value === 'permanent', basis: r => `contractType=${r.fields.contractType?.value ?? 'not read'}` },
-  { re: /\bfixed[\s-]?term\b/i, check: r => r.fields.contractType?.value === 'fixed-term', basis: r => `contractType=${r.fields.contractType?.value ?? 'not read'}` },
-  { re: /\bfull[\s-]?time\b/i, check: r => r.fields.workload?.value === 'full-time', basis: r => `workload=${r.fields.workload?.value ?? 'not read'}` },
-  { re: /\bpart[\s-]?time\b/i, check: r => r.fields.workload?.value === 'part-time', basis: r => `workload=${r.fields.workload?.value ?? 'not read'}` },
-  { re: /\bintern(ship)?\b/i, check: r => /intern/i.test(`${r.fields.title?.value ?? ''} ${r.lead.title ?? ''}`), basis: r => `title=${r.fields.title?.value ?? r.lead.title ?? 'not read'}` },
-  { re: /\bsalary\b/i, check: r => !!r.fields.salary?.value, basis: r => `salary=${r.fields.salary?.value ?? 'not read'}` },
-  { re: /\bnot volunteer\b|paid role/i, check: r => r.fields.engagement?.value && r.fields.engagement.value !== 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? 'not read'}` },
-  { re: /\bvolunteer\b/i, check: r => r.fields.engagement?.value === 'volunteer', basis: r => `engagement=${r.fields.engagement?.value ?? 'not read'}` }
+  { re: /\bremote\b/i, clauses: r => [remoteClause(r)] },
+  { re: /\bhybrid\b/i, clauses: r => [equalsClause(r, 'workArrangement', 'hybrid')] },
+  { re: /\bon[\s-]?site\b/i, clauses: r => [equalsClause(r, 'workArrangement', 'on-site')] },
+  { re: /\bpermanent\b/i, clauses: r => [equalsClause(r, 'contractType', 'permanent')] },
+  { re: /\bfixed[\s-]?term\b/i, clauses: r => [equalsClause(r, 'contractType', 'fixed-term')] },
+  { re: /\bfull[\s-]?time\b/i, clauses: r => [equalsClause(r, 'workload', 'full-time')] },
+  { re: /\bpart[\s-]?time\b/i, clauses: r => [equalsClause(r, 'workload', 'part-time')] },
+  { re: /\bsalary\b/i, clauses: r => [presentClause(r, 'salary')] },
+  // A compound preference: an internship that is paid, in the city it names.
+  // Each clause is judged; the title alone never satisfies it.
+  // The words between the two parts of the preference are part of the
+  // preference, not a reason to stop reading it: "paid summer internship"
+  // is still an internship that has to be paid.
+  { re: /\bpaid\b[\s\S]{0,40}?\bintern(ship)?\b/i, clauses: (r, text) => [titleClause(r), paidClause(r), ...(CITY_RULE.test(text) ? [cityClause(r, text.match(CITY_RULE)[0])] : [])] },
+  { re: /\bintern(ship)?\b/i, clauses: r => [titleClause(r)] },
+  { re: /\bnot volunteer\b/i, clauses: r => [engagementClause(r, false)] },
+  { re: /\bpaid role\b/i, clauses: r => [paidClause(r)] },
+  { re: /\bvolunteer\b/i, clauses: r => [engagementClause(r, true)] },
+  { re: CITY_RULE, clauses: (r, text) => [cityClause(r, text.match(CITY_RULE)[0])] }
 ];
-const CITY_RULE = { re: /\b(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|queenstown|palmerston north|new plymouth|whangarei|invercargill)\b/i };
 export function preferenceVerdicts(record, preferences = []) {
   return preferences.map(text => {
     const rule = PREFERENCE_RULES.find(r => r.re.test(text));
-    if (rule) {
-      const ok = rule.check(record);
-      return { text, status: ok ? 'satisfied' : 'conflict', basis: rule.basis(record) };
-    }
-    const city = text.match(CITY_RULE.re);
-    if (city) {
-      const location = record.fields.location?.value ?? '';
-      return { text, status: new RegExp(city[0], 'i').test(location) ? 'satisfied' : 'conflict', basis: `location=${location || 'not read'}` };
-    }
-    return { text, status: 'unknown', basis: 'No executable preference rule; this preference does not affect ranking' };
+    if (!rule) return { text, status: 'unknown', basis: 'No executable preference rule; this preference does not affect ranking' };
+    const clauses = rule.clauses(record, text);
+    // A clause that contradicts the preference decides it; a clause that could
+    // not be read leaves it unknown, because the posting did not say no.
+    const status = clauses.some(c => c.status === 'conflict') ? 'conflict' : clauses.some(c => c.status === 'unknown') ? 'unknown' : 'satisfied';
+    return { text, status, basis: clauses.map(c => `${c.basis} (${c.status})`).join('; ') };
   });
 }
 export function preferenceScore(record, preferences = []) {
@@ -275,13 +340,44 @@ export function render(report) {
   lines.push('', `<!-- nz-job-scout-v1 run=${state.id} context=${state.context} -->`, '');
   return lines.join('\n');
 }
+// A report is a pair of files: the readable markdown and the JSON sidecar.
+// The pair is reserved before anything is written, so that an interrupted
+// report (a sidecar whose markdown is missing) never blocks the next attempt
+// and never overwrites a report that belongs to somebody else. A sidecar
+// without its markdown is only completed when it is this run's own: another
+// report's sidecar is left exactly as it is.
+async function reserveReportPair(root, state, base) {
+  const output = join(root, 'output');
+  const candidates = [base, `${base}-${state.id.slice(0, 8)}`];
+  for (const name of candidates) {
+    const json = join(output, `${name}.json`), md = join(output, `${name}.md`);
+    const mdInfo = await lstat(md).catch(e => { if (e.code !== 'ENOENT') throw e; });
+    const jsonInfo = await lstat(json).catch(e => { if (e.code !== 'ENOENT') throw e; });
+    if (mdInfo) continue; // the readable report of this name is there: the name is taken
+    if (!jsonInfo) return { name, json, md, replaceJson: false };
+    const data = await readJson(json, null).catch(() => null);
+    if (data?.state?.id === state.id) return { name, json, md, replaceJson: true };
+  }
+  throw new Error(`Refusing to overwrite an existing report in ${output}: no free report pair could be reserved`);
+}
 export async function produce(root, state, reader, input, now = new Date().toISOString()) {
   const judgments = validateJudgments(input, state), oldState = await readJson(join(root, '.nz-job-scout-state.json'), {});
   const exclusions = [...(oldState.excludedRoles ?? []), ...state.config.exclusions];
+  // A run that changed its runtime is disclosed in the report: the evidence
+  // collected under the earlier runtime was not re-read, so the report is
+  // about the evidence as it was read.
+  for (const change of [...(state.implementationChanges ?? []), ...(state.request?.implementationChanges ?? [])]) {
+    const text = `This run continued under a different runtime (${describeImplementation(change.from)} to ${describeImplementation(change.to)}); the change was accepted explicitly, and evidence collected under the earlier runtime was not re-read.`;
+    if (!state.config.disclosures.includes(text)) state.config.disclosures.push(text);
+  }
   // Verification order: hard conditions already satisfied first, then a few
   // high-value unknowns. Unverified jobs never become recommendations.
   const plan = applicationPlan(state, judgments, exclusions, now);
   for (const record of plan) await verifyApplication(record, reader);
+  // The report's own counters are taken after the report stage has spent what
+  // it spends, so the sidecar, the prose and the saved run all show the same
+  // numbers. The spend of this command is part of this run's own delta.
+  if (state.request?.baselineBudget) state.request.own = ownSpend(state);
   const preferences = state.config.preferences ?? [];
   const items = state.records.map(record => {
     const judgment = judgments.find(j => j.recordId === record.recordId), prior = excluded(record, exclusions);
@@ -300,6 +396,15 @@ export async function produce(root, state, reader, input, now = new Date().toISO
     const match = items2.find(i => overlap(i.identity, old.identity));
     const r = match ? records[match.recordId] : null;
     if (r?.closure) withdrawals.push({ title: r.fields.title?.value ?? r.lead.title, employer: r.fields.employer?.value ?? r.lead.employer, scope: r.closure.scope, reason: r.closure.quote });
+    // A role that was recommended before and whose own posting now states a
+    // closing date that has passed is withdrawn: the employer stated that the
+    // advertisement is no longer open. Only the employer's own statement
+    // closes the employer's role; a mirror's expiry speaks for the mirror and
+    // never reaches this branch.
+    else if (match?.checks?.some(c => c.status === 'conflict' && c.name === 'Closing date')) {
+      const closing = match.checks.find(c => c.status === 'conflict' && c.name === 'Closing date');
+      withdrawals.push({ title: r.fields.title?.value ?? r.lead.title, employer: r.fields.employer?.value ?? r.lead.employer, scope: 'employer-expiry', reason: closing.detail });
+    }
     else if (!r || r.readState !== 'read') pendingHistory.push(old.recordId);
   }
   const promoted = items2.filter(i => ['ready', 'check', 'pool', 'unresolved'].includes(i.category));
@@ -317,18 +422,20 @@ export async function produce(root, state, reader, input, now = new Date().toISO
   const budgetShort = Object.keys(state.budget.used).filter(k => state.budget.used[k] >= state.budget.limits[k]);
   const stopReason = budgetShort.length ? `Stage budget reached (${budgetShort.map(k => `${k} ${state.budget.used[k]}/${state.budget.limits[k]}`).join(', ')}); later-stage allowances were not consumed` : 'Finished with the available evidence; incomplete sources and unassessed records are disclosed';
   const { records: _drop, ...stateWithoutRecords } = state;
-  const ledger = requestLedger(await runStates(root));
+  // The project ledger must count what this command has already spent, so the
+  // run that is producing the report is read from memory and not from the
+  // file it wrote before the report stage began.
+  const ledger = requestLedger((await runStates(root)).map(s => s.id === state.id ? state : s));
   const report = { format: 'nz-job-scout-report-v1', generatedAt: now, date: nzDate(now), context: state.context,
     coverage: coverage(state), state: stateWithoutRecords, records, items: items2, newItems: visible, overflow, withdrawals, pendingHistory,
     unchanged: promoted.filter(i => previous.some(p => p.material === i.material)).length,
     ledger, stopReason };
   const base = `nz-jobs-${report.date}`;
-  const occupied = await lstat(join(root, 'output', `${base}.md`)).catch(e => { if (e.code !== 'ENOENT') throw e; });
-  const name = occupied ? `${base}-${state.id.slice(0, 8)}` : base;
-  const json = join(root, 'output', `${name}.json`), md = join(root, 'output', `${name}.md`);
+  const pair = await reserveReportPair(root, state, base);
+  const { json, md } = pair;
   // The sidecar stores each record and each assessment once: the promoted list
   // is an index of record IDs, not a second copy of the item.
-  await put(root, json, { ...report, newItems: visible.map(i => ({ recordId: i.recordId, category: i.category, fit: i.judgment?.fit ?? null })) });
+  await put(root, json, { ...report, newItems: visible.map(i => ({ recordId: i.recordId, category: i.category, fit: i.judgment?.fit ?? null })) }, { replace: pair.replaceJson });
   await put(root, md, render(report));
   state.reported = { json, md };
   return { report: md, records: json, coverage: report.coverage, ready: visible.filter(i => i.category === 'ready').length, needsChecking: visible.filter(i => ['check', 'unresolved'].includes(i.category)).length, channels: channels.length, withdrawals: withdrawals.length };

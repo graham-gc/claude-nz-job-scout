@@ -218,12 +218,21 @@ export function select(node, selector) {
   const all = descendants(node).filter(el => el.type === 'tag');
   return all.filter(el => groups.some(steps => matchSteps(el, steps)));
 }
+// Block-level elements end a run of text. Two words that sit in different
+// blocks are two words: without the boundary "<p>Based in</p><p>Auckland</p>"
+// reads as the single word "Based inAuckland", and a place the posting
+// states outright is lost. Inline elements keep their text together, so
+// "<b>Build</b> and maintain" still reads as one sentence.
+const BLOCK_TAGS = new Set(['address', 'article', 'aside', 'blockquote', 'body', 'br', 'dd', 'details', 'div', 'dl', 'dt',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hr', 'html',
+  'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul']);
 export function textOfNode(node) {
   if (!node) return '';
   if (node.type === 'text') return node.value;
   if (node.type !== 'tag' && node.type !== 'root') return '';
   let out = '';
   for (const child of node.children) out += textOfNode(child);
+  if (node.type === 'tag' && BLOCK_TAGS.has(node.tag)) return ` ${out} `;
   return out;
 }
 function cloneNode(node) {

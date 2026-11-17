@@ -76,7 +76,9 @@ function ipv6Range(groups) {
   const all = groups.every(g => g === 0);
   if (all) return 'unspecified';
   if (groups.slice(0, 7).every(g => g === 0) && groups[7] === 1) return 'loopback';
-  if (groups[0] === 0xff) return 'multicast';
+  // IPv6 multicast is the whole ff00::/8 block, not only ff::/16: a group
+  // address is never a host a request can be sent to.
+  if ((groups[0] & 0xff00) === 0xff00) return 'multicast';
   if ((groups[0] & 0xfe00) === 0xfc00) return 'uniqueLocal';
   if ((groups[0] & 0xffc0) === 0xfe80) return 'linkLocal';
   if (groups[0] === 0x2001 && groups[1] === 0x0db8) return 'documentation';
