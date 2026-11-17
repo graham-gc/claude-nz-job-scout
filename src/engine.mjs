@@ -6,7 +6,7 @@ import { load } from './html.mjs';
 import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
 import { criteria, contextHash, checksWithJudgment, DISQUALIFIER_KINDS, hardChecks, isChannel } from './criteria.mjs';
-import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, CLOSED_NOTICE } from './evidence.mjs';
+import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, fieldIsEmployerPosting, SEMANTICS_WEIGHT, publicationOrderKey, CLOSED_NOTICE } from './evidence.mjs';
 import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
 import { siteKey } from './site.mjs';
 
@@ -257,19 +257,63 @@ export function relevant(record, config) {
 // ---------------------------------------------------------------------------
 // A validity window (a JSON-LD validThrough) is weaker evidence than a
 // deadline the page actually calls a deadline.
-const SEMANTIC_WEIGHT = { 'first-published': 4, 'advertised-date': 4, 'deadline': 3, 'deadline-date': 3, 'valid-through': 2, 'updated': 1, 'last-published': 1, 'platform-created': 1 };
 const READ_RANK = { read: 4, 'closed-stated': 3, partial: 2, 'not-read': 1, unreadable: 0 };
-const fieldWeight = f => SEMANTIC_WEIGHT[f?.semantics] ?? 2;
+const fieldWeight = f => SEMANTICS_WEIGHT[f?.semantics] ?? 2;
+
+// Every reading a field carries, with the evidence that carried it.
+function fieldClaims(field) {
+  const list = [];
+  if (field?.value != null) list.push({ value: field.value, semantics: field.semantics, source: field.source, quote: field.quote, origin: field.origin });
+  for (const alt of field?.ambiguity ?? []) if (alt?.value != null) list.push({ value: alt.value, semantics: alt.semantics, source: alt.source, quote: alt.quote, origin: alt.origin });
+  return list;
+}
+// The standing of a reading: what kind of evidence it is, and whether it
+// speaks for the employer's own posting or only for the page it was read on.
+const claimRank = c => [fieldWeight(c), fieldIsEmployerPosting(c) ? 1 : 0];
+// Two publication claims of the same kind are ordered by the day they name,
+// not by how their text sorts: the earlier one is the first appearance, and
+// which one governs must not depend on the order the pages were read in.
+const PUBLICATION_SEMANTICS = new Set(['first-published', 'advertised-date']);
+const publicationOrder = (a, b) => {
+  if (!PUBLICATION_SEMANTICS.has(a.semantics) || !PUBLICATION_SEMANTICS.has(b.semantics)) return 0;
+  const ka = publicationOrderKey(a.value), kb = publicationOrderKey(b.value);
+  if (!ka || !kb) return 0;
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+};
+// A stronger reading wins. Equal readings are ordered by their content, not
+// by the order the pages were read in, so a merge reads the same either way.
+const claimOrder = (a, b) => (claimRank(b)[0] - claimRank(a)[0]) || (claimRank(b)[1] - claimRank(a)[1])
+  || publicationOrder(a, b)
+  || String(a.value).localeCompare(String(b.value)) || String(a.source?.url ?? '').localeCompare(String(b.source?.url ?? ''));
 
 function mergeField(old, incoming, name) {
   const a = old.fields[name], b = incoming.fields[name];
   if (!b || b.value == null) return null;
   if (!a || a.value == null) { old.fields[name] = b; return null; }
-  if (JSON.stringify(a.value) === JSON.stringify(b.value)) return null;
-  const conflict = { field: name, kept: a.value, discarded: b.value, keptSource: a.source?.url ?? null, discardedSource: b.source?.url ?? null };
-  // A stronger piece of evidence (a first-publication date beats an update stamp) wins.
-  if (fieldWeight(b) > fieldWeight(a)) { old.fields[name] = b; conflict.kept = b.value; conflict.discarded = a.value; conflict.keptSource = b.source?.url ?? null; conflict.discardedSource = a.source?.url ?? null; }
-  return conflict;
+  const seen = new Set();
+  const claims = [];
+  for (const c of [...fieldClaims(a), ...fieldClaims(b)]) {
+    const k = `${JSON.stringify(c.value)}|${c.semantics ?? ''}|${c.source?.url ?? ''}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    claims.push(c);
+  }
+  if (claims.length === 1) return null;
+  const sorted = [...claims].sort(claimOrder);
+  const governing = sorted[0];
+  const rest = sorted.slice(1);
+  const values = [...new Set(sorted.map(c => JSON.stringify(c.value)))];
+  // The readings that disagree are kept beside the one that governs: nothing
+  // is dropped, and the check can see that the sources disagree.
+  old.fields[name] = { value: governing.value, source: governing.source, quote: governing.quote,
+    ...(governing.semantics ? { semantics: governing.semantics } : {}),
+    ...(governing.origin ? { origin: governing.origin } : {}),
+    ...(rest.length ? { ambiguity: rest } : {}) };
+  if (values.length === 1) return null;
+  const other = rest.find(c => JSON.stringify(c.value) !== JSON.stringify(governing.value)) ?? rest[0];
+  return { field: name, kept: governing.value, discarded: other.value,
+    keptSource: governing.source?.url ?? null, discardedSource: other.source?.url ?? null,
+    readings: sorted.map(c => c.value) };
 }
 function mergeClosure(old, incoming) {
   const list = old.closures ?? (old.closures = []);

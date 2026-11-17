@@ -1,5 +1,6 @@
 import { load, decodeEntities } from './html.mjs';
 import { hash } from './store.mjs';
+import { isoDay, looksLikeTimestamp, parseMoment, parseNumeric } from './dates.mjs';
 import { publicUrl } from './net.mjs';
 import { placeFragment } from './places.mjs';
 import { tenantOf } from './site.mjs';
@@ -50,17 +51,58 @@ export function normaliseText(value) {
 }
 
 // A publication timestamp is strengthened by the kind of evidence, not by the
-// order it was read in. A page that states the publication date replaces an
-// API timestamp that only says "last published"; two equally strong readings
-// never overwrite each other.
-const POSTED_STRENGTH = { 'first-published': 4, 'advertised-date': 3, 'last-published': 2, 'platform-created': 1, 'updated': 0 };
+// order it was read in. A page that states when the role was first advertised
+// replaces an API timestamp that only says "last published". Every claim that
+// disagrees with the one kept is kept beside it as an ambiguity, so nothing is
+// dropped and nothing is decided by read order: two publication dates that
+// disagree are a contradiction the check must see, not a detail it may lose.
+export const SEMANTICS_WEIGHT = {
+  'first-published': 4, 'advertised-date': 3, 'deadline': 3, 'deadline-date': 3,
+  'platform-created': 2, 'valid-through': 2, 'last-published': 1, 'updated': 0, 'reposted': 0
+};
+const POSTED_STRENGTH = SEMANTICS_WEIGHT;
+// The day a publication value names, for ordering two claims of the same kind.
+// The earliest reading is used: a value that reads two ways is ordered by the
+// day it could be earliest, so which claim is kept never depends on the
+// reading the reader would prefer.
+export function publicationOrderKey(value) {
+  const { readings } = readDate(String(value ?? ''));
+  if (!readings.length) return null;
+  return [...readings].sort()[0];
+}
 export function setPostedAt(fields, value, response, quote, semantics) {
   if (value == null || value === '') return;
   const strength = POSTED_STRENGTH[semantics] ?? 1;
   const current = fields.postedAt;
-  if (current?.value && (POSTED_STRENGTH[current.semantics] ?? 1) >= strength) return;
-  fields.postedAt = fact(value, response, quote, semantics);
+  if (!current || current.value == null) { fields.postedAt = fact(value, response, quote, semantics); return; }
+  const currentStrength = POSTED_STRENGTH[current.semantics] ?? 1;
+  const same = String(current.value) === String(value);
+  // A claim that agrees with the one kept adds nothing; the wording that
+  // carried it is already on the fact.
+  if (same && currentStrength >= strength) return;
+  const source = { url: response?.url, observedAt: response?.observedAt, snapshot: response?.snapshot };
+  const incoming = { value, semantics, source, quote: clean(quote) };
+  const displaced = same ? null : { value: current.value, semantics: current.semantics, source: current.source, quote: current.quote, origin: current.origin };
+  if (currentStrength > strength) {
+    // The weaker reading stays on the record as an ambiguity.
+    current.ambiguity = [...(current.ambiguity ?? []), incoming];
+    return;
+  }
+  if (currentStrength === strength) {
+    // Two claims of the same kind: the earlier one is the first appearance, and
+    // it is kept whichever order the pages were read in. The later one stays
+    // beside it as the republication it is.
+    const earlier = publicationOrderKey(value), later = publicationOrderKey(current.value);
+    if (!(earlier && later && earlier < later)) {
+      current.ambiguity = [...(current.ambiguity ?? []), incoming];
+      return;
+    }
+  }
+  const stronger = fact(value, response, quote, semantics);
+  stronger.ambiguity = [...(current.ambiguity ?? []), ...(displaced ? [displaced] : [])];
+  fields.postedAt = stronger;
 }
+
 export const fact = (value, response, quote = value, semantics) => value === null || value === undefined || value === ''
   ? { value: null, absence: 'not-stated-on-page', source: { url: response?.url, observedAt: response?.observedAt, snapshot: response?.snapshot } }
   : { value, source: { url: response?.url, observedAt: response?.observedAt, snapshot: response?.snapshot }, quote: clean(typeof quote === 'object' ? JSON.stringify(quote) : quote), ...(semantics ? { semantics } : {}) };
@@ -173,26 +215,26 @@ const durationFact = body => {
 // still safe to state.
 // ---------------------------------------------------------------------------
 const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-const monthIndex = name => { const i = MONTH_NAMES.indexOf(String(name ?? '').toLowerCase().replace(/[^a-z]/g, '')); return i < 0 ? null : i + 1; };
-function isoDate(year, month, day) {
-  const y = Number(year), m = Number(month), d = Number(day);
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d) || m < 1 || m > 12 || d < 1 || d > 31) return null;
-  const stamp = Date.UTC(y, m - 1, d), back = new Date(stamp);
-  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== m - 1 || back.getUTCDate() !== d) return null;
-  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-}
+const monthIndex = name => { const i = MONTH_NAMES.indexOf(String(name ?? '').toLowerCase().replace(/[^a-z]/g, '')); return i < 0 ? null : i + 1; }
+const isoDate = isoDay;
 export function readDate(raw) {
   const text = String(raw ?? '').trim();
   if (!text) return { readings: [], format: 'empty' };
   const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) { const day = isoDate(iso[1], iso[2], iso[3]); return day ? { readings: [day], format: 'iso' } : { readings: [], format: 'invalid' }; }
-  const numeric = text.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+  if (iso) {
+    // A value that carries a time is read as a moment first. A time that does
+    // not exist is not a date, and the value is not quietly read as its day.
+    if (looksLikeTimestamp(text)) {
+      const moment = parseMoment(text);
+      if (!moment || moment.kind === 'invalid') return { readings: [], format: 'invalid' };
+    }
+    const day = isoDate(iso[1], iso[2], iso[3]);
+    return day ? { readings: [day], format: 'iso' } : { readings: [], format: 'invalid' };
+  }
+  const numeric = parseNumeric(text);
   if (numeric) {
-    const a = Number(numeric[1]), b = Number(numeric[2]), year = numeric[3];
-    // Day first (NZ) and month first (US) are both possible; only a component
-    // above 12 rules one of them out.
-    const readings = [...new Set([isoDate(year, b, a), isoDate(year, a, b)].filter(Boolean))];
-    if (!readings.length) return { readings: [], format: 'invalid' };
+    if (numeric.kind === 'invalid') return { readings: [], format: 'invalid' };
+    const readings = numeric.candidates.map(c => c.day);
     return { readings, format: readings.length > 1 ? 'numeric-ambiguous' : 'numeric' };
   }
   const words = text.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+),?\s+(\d{4})$/);
@@ -212,24 +254,76 @@ const PUBLICATION_WORDING = /\b(?:posted|published|advertised|listed|advertiseme
 // and it is the second one; the first date is a different fact about a
 // different thing. A quotation that carries the wording and a date somewhere
 // else proves nothing, so the binding is what counts.
-const DATE_SOURCE = String.raw`(\d{4}-\d{2}-\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+\d{4})`;
+const DATE_SOURCE = String.raw`(\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+\d{4})`;
+// How strong a publication claim is. A posting that says when the role was
+// first advertised is evidence about the advertisement itself; a plain
+// "posted on" is evidence about one posting of it; a repost says only that the
+// advertisement was put up again, which proves nothing about when it first
+// appeared.
+export const PUBLICATION_RANK = { 'first-published': 3, 'advertised-date': 2, 'reposted': 1 };
+export const PUBLICATION_SEMANTICS = ['first-published', 'advertised-date'];
+// A negation belongs to the wording it sits in front of. "This role was not
+// first advertised on 15/10/2026" states no publication date at all, and the
+// date in it is not evidence of one.
+const NEGATED_WORDING = /\b(?:not|never|no longer|n't)\b((?:\s+[A-Za-z]+){0,2})\s*$/i;
+const negatedBefore = prefix => {
+  const m = prefix.match(NEGATED_WORDING);
+  return Boolean(m) && !m[1].includes(',');
+};
+// A repost is not a first publication. The wording "reposted", "re-posted",
+// "republished" and "relisted" carries a repost date, and no other pattern may
+// read the date inside it as a publication date: the guard below stops the
+// generic publication wording from matching the tail of "Reposted" or
+// "re-published".
+//
+// The generic wording is not required to start at a word boundary. A posting
+// often runs its words together — "AucklandPosted 15/10/2026" — and the date
+// is still a date the posting states. The guard is what separates that from
+// "Reposted", which is a repost and not a publication.
+const NOT_A_REPOST = String.raw`(?<!\b[Rr]e-)(?<!\b[Rr]e)`;
 const PUBLICATION_DATE_PATTERNS = [
-  new RegExp(String.raw`(?:posted|published|advertised|listed)\s*(?:on|at|from)?\s*:?\s*${DATE_SOURCE}`, 'gi'),
-  new RegExp(String.raw`(?:advertisement date|date posted|date published)\s*:?\s*${DATE_SOURCE}`, 'gi'),
-  new RegExp(String.raw`${DATE_SOURCE}\s*(?:[-–—|,]\s*)?(?:was\s+)?(?:posted|published|advertised|listed)`, 'gi'),
+  { semantics: 'first-published', wordingFirst: true, re: new RegExp(String.raw`\b(?:first|originally)\s+(?:advertised|posted|published|listed)\b(?:\s+on)?\s*:?\s*${DATE_SOURCE}`, 'gi') },
+  { semantics: 'reposted', wordingFirst: true, re: new RegExp(String.raw`\b(?:reposted|re-posted|republished|re-published|relisted|re-advertised)\b(?:\s+on)?\s*:?\s*${DATE_SOURCE}`, 'gi') },
+  { semantics: 'advertised-date', wordingFirst: true, re: new RegExp(String.raw`\b(?:advertisement date|advertised date|date posted|date published)\s*:?\s*${DATE_SOURCE}`, 'gi') },
+  { semantics: 'advertised-date', wordingFirst: true, re: new RegExp(String.raw`${NOT_A_REPOST}(?:posted|published|advertised|listed)\b(?:\s+on)?\s*:?\s*${DATE_SOURCE}`, 'gi') },
+  { semantics: 'advertised-date', wordingFirst: false, re: new RegExp(String.raw`${DATE_SOURCE}\s*(?:[-–—|,]\s*)?(?:was\s+)?${NOT_A_REPOST}(?:posted|published|advertised|listed)\b`, 'gi') },
 ];
-export function publicationDateIn(text) {
+// The context a negation is read in: the sentence the wording sits in. A
+// negation in another sentence does not reach across to it.
+const sentenceContext = prefix => {
+  const cut = Math.max(prefix.lastIndexOf('.'), prefix.lastIndexOf('!'), prefix.lastIndexOf('?'), prefix.lastIndexOf(';'), prefix.lastIndexOf('\n'));
+  return cut >= 0 ? prefix.slice(cut + 1) : prefix;
+};
+// Every publication claim a text makes: the wording that carries it, the date
+// bound to it, and how strong it is.
+export function publicationClaimsIn(text) {
   const body = normaliseText(text);
-  if (!PUBLICATION_WORDING.test(body)) return { readings: [], format: 'no-publication-wording' };
-  const bound = new Set();
+  const claims = [];
   for (const pattern of PUBLICATION_DATE_PATTERNS) {
-    for (const m of body.matchAll(pattern)) bound.add(m[1].trim());
+    for (const m of body.matchAll(new RegExp(pattern.re.source, 'gi'))) {
+      const value = m[m.length - 1];
+      if (!value) continue;
+      const negated = pattern.wordingFirst
+        ? negatedBefore(sentenceContext(body.slice(0, m.index)))
+        : /\b(?:not|never|no longer|n't)\b/i.test(m[0]);
+      if (negated) continue;
+      claims.push({ value: value.trim(), semantics: pattern.semantics, quote: clean(m[0]) });
+    }
   }
-  if (!bound.size) return { readings: [], format: 'no-date' };
-  // Two different publication dates in one quotation cannot both be the day
-  // the posting was published on, so nothing is decided by them.
-  if (bound.size > 1) return { readings: [], format: 'ambiguous' };
-  return readDate([...bound][0]);
+  return claims;
+}
+export function publicationDateIn(text) {
+  const claims = publicationClaimsIn(text);
+  const usable = claims.filter(c => c.semantics !== 'reposted');
+  if (!usable.length) return { readings: [], format: claims.length ? 'no-publication-wording' : 'no-publication-wording', rank: 0, claims };
+  const best = Math.max(...usable.map(c => PUBLICATION_RANK[c.semantics] ?? 0));
+  const strongest = usable.filter(c => (PUBLICATION_RANK[c.semantics] ?? 0) === best);
+  const values = [...new Set(strongest.map(c => c.value))];
+  // Two different publication dates at the same strength cannot both be the
+  // day the posting was published on, so nothing is decided by them.
+  if (values.length > 1) return { readings: [], format: 'ambiguous', rank: best, claims };
+  const { readings, format } = readDate(values[0]);
+  return { readings, format: readings.length ? format : 'unreadable', rank: best, claims };
 }
 
 // A quoted passage is read with focused patterns: the model points at one
@@ -266,6 +360,53 @@ export function statedFacts(text) {
   return out;
 }
 
+// The wording that introduces a closing statement, and the date and time that
+// follow it.
+const CLOSING_PHRASE = /\b(?:closing(?:\s+(?:date|on))?|applications?\s+(?:close|closes|closed|must be submitted(?:\s+online)?\s+by)|apply by|application deadline)\b/gi;
+const CLOSING_DATE_VALUE = String.raw`(?:\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+20\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})`;
+const CLOSING_TIME_VALUE = String.raw`\d{1,2}(?::\d{2})?\s*(?:am|pm)?`;
+// A stated clock. A bare hour ("at 5") is not a clock — it could be either
+// side of noon — so it is not read as one.
+function clockFrom(text) {
+  const t = String(text ?? '').trim().toLowerCase().replace(/\s+/g, '');
+  const m = t.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = m[2] == null ? 0 : Number(m[2]);
+  if (minute > 59) return null;
+  if (m[3] === 'pm') { if (hour < 1 || hour > 12) return null; hour = hour === 12 ? 12 : hour + 12; }
+  else if (m[3] === 'am') { if (hour < 1 || hour > 12) return null; hour = hour === 12 ? 0 : hour; }
+  else if (m[2] == null) return null;
+  if (hour > 23) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+// The closing value a tail states, with the time it names when it names one.
+function closingValue(tail) {
+  const text = String(tail ?? '');
+  const before = text.match(new RegExp(String.raw`^\s*:?\s*(?:at\s+(?<time>${CLOSING_TIME_VALUE})\s*)?(?:on\s+)?(?<date>${CLOSING_DATE_VALUE})`, 'i'));
+  const after = text.match(new RegExp(String.raw`^\s*:?\s*(?:on\s+)?(?<date>${CLOSING_DATE_VALUE})\s*(?:at\s+(?<time>${CLOSING_TIME_VALUE}))?`, 'i'));
+  const pick = [after, before].find(m => m?.groups?.date);
+  if (!pick) return null;
+  const raw = pick.groups.date;
+  const clock = clockFrom(pick.groups.time);
+  const { readings } = readDate(raw);
+  // A closing statement the runtime cannot read is kept as it was written. It
+  // is then reported as a statement it cannot read, rather than being dropped
+  // and letting the advertisement look open. An invalid time is never read as
+  // a day, so it can never become "expired".
+  if (!readings.length) return { value: raw, quote: raw };
+  // A date that reads two ways stays as written; the time cannot be attached
+  // to a day the reader has not chosen.
+  if (readings.length > 1) return { value: raw, quote: raw };
+  const day = readings[0];
+  // A time that was stated but cannot be read is kept in the value as it was
+  // written, so the runtime reports it as a statement it cannot read rather
+  // than as a day the employer never wrote.
+  const stated = pick.groups.time ? pick.groups.time.trim().replace(/\s+/g, '') : null;
+  const value = clock ? `${day}T${clock}:00` : stated ? `${day}T${stated}` : day;
+  return { value, quote: `${pick.groups.time ? `at ${pick.groups.time} ` : ''}${raw}` };
+}
+
 export function observeText(record, text, response) {
   const fields = record.fields;
   const set = (name, value, quote = value) => { if (!fields[name]?.value && value !== null && value !== undefined && value !== '') fields[name] = fact(value, response, quote); };
@@ -298,29 +439,42 @@ export function observeText(record, text, response) {
   else if (kind) record.opportunityKind = fact('talent-pool', response, kind);
   const dates = name => {
     if (name === 'postedAt') {
-      // "Posted 28 February, 2026" is the wording an aggregator uses: no "on",
-      // and a comma before the year. "Posted 15/10/2026" and "Posted on :
-      // 24-10-2026" are the numeric forms of the same statement. A numeric
-      // date that could read two ways is stored as written, so the check can
-      // judge it without the reader choosing a reading.
-      const pattern = /(?:Posted(?:\s+on)?|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s*20\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4})/i;
-      const m = body.match(pattern);
-      if (!m) return;
-      const { readings } = readDate(m[1]);
-      if (!readings.length) return;
-      setPostedAt(fields, readings.length === 1 ? readings[0] : m[1], response, m[0], 'advertised-date');
+      // Every publication claim the body makes is read, each with the wording
+      // that carries it. "Posted 28 February, 2026" is the wording an
+      // aggregator uses: no "on", and a comma before the year. "Posted
+      // 15/10/2026" and "Posted on : 24-10-2026" are the numeric forms of the
+      // same statement. A numeric date that could read two ways is stored as
+      // written, so the check can judge it without the reader choosing a
+      // reading.
+      for (const claim of publicationClaimsIn(body)) {
+        if (claim.semantics === 'reposted') {
+          // A repost says when the advertisement was put up again, not when it
+          // first appeared. It is kept as what it is and never counted as a
+          // publication date.
+          if (!record.repostedAt) record.repostedAt = fact(claim.value, response, claim.quote, 'reposted');
+          continue;
+        }
+        const { readings } = readDate(claim.value);
+        if (!readings.length) continue;
+        const value = looksLikeTimestamp(claim.value) ? claim.value : readings.length === 1 ? readings[0] : claim.value;
+        setPostedAt(fields, value, response, claim.quote, claim.semantics);
+      }
       return;
     }
-    const pattern = new RegExp(`(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\\s*:?\\s*(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4})`
-      + `|Applications? close(?:s)?(?:\\s*at\\s*[\\d.]{1,5}\\s*(?:am|pm)?)?\\s+on\\s+(?:[A-Za-z]+,?\\s+)?(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4})`, 'i');
-    const m = body.match(pattern);
-    if (m) {
-      const raw = m[1] ?? m[2];
-      if (!raw) return;
-      const { readings } = readDate(raw);
-      if (!readings.length) return;
-      const value = readings.length === 1 ? readings[0] : raw;
-      if (!fields[name]?.value) fields[name] = fact(value, response, m[0], 'deadline-date');
+    // A closing statement keeps the time it names. "Applications close at 1pm
+    // on 17 November 2026" is a moment, not a day, and dropping the hour would
+    // read a closing that has passed as one that has not.
+    // Every closing wording in the body is a candidate, and the first one
+    // that states a readable date is the closing statement. A phrase that is
+    // followed by nothing readable ("closing applications will be assessed")
+    // is not a closing date, and the wording after it is still read.
+    for (const phrase of body.matchAll(new RegExp(CLOSING_PHRASE.source, 'gi'))) {
+      const start = phrase.index + phrase[0].length;
+      const tail = body.slice(start, start + 90);
+      const closing = closingValue(tail);
+      if (!closing) continue;
+      if (!fields[name]?.value) fields[name] = fact(closing.value, response, `${phrase[0]}${closing.quote}`, 'deadline-date');
+      return;
     }
   };
   dates('postedAt'); dates('closesAt');
@@ -462,7 +616,7 @@ export function fromApi(record, job, response, company) {
   record.apiUrl = p === 'greenhouse' ? `https://boards-api.greenhouse.io/v1/boards/${record.account}/jobs/${record.ids.apiPosting ?? record.ids.advertisement}`
     : p === 'smartrecruiters' ? `https://api.smartrecruiters.com/v1/companies/${record.account}/postings/${record.ids.apiPosting}` : null;
   record.aliases = [...new Set([...record.aliases, ...[job.absolute_url, job.hostedUrl, job.jobUrl, job.applyUrl].filter(Boolean).map(canonicalLocal).filter(Boolean)])];
-  return record;
+  return stampOrigin(record);
 }
 
 export function advertisementFromUrl(url) {
@@ -607,12 +761,15 @@ export function fromHtml(record, response) {
     // A mirror that says its advertisement expired keeps the facts it printed:
     // the record stays a usable historical lookup entry — with its own
     // publication date — while the employer's own posting stays unknown.
-    if (isEmployerPosting(record)) return record;
+    if (isEmployerPosting(record)) return stampOrigin(record);
   }
   if (posting) {
     f.title = fact(posting.title, response);
     f.employer = fact(typeof posting.hiringOrganization === 'string' ? posting.hiringOrganization : posting.hiringOrganization?.name, response);
-    if (posting.datePosted) setPostedAt(f, posting.datePosted, response, posting.datePosted, 'advertised-date');
+    // A JobPosting's datePosted is the date the employer first put the job up
+    // (Google's schema: "the original date that employer posted the job"), so
+    // it states the first appearance rather than one posting of it.
+    if (posting.datePosted) setPostedAt(f, posting.datePosted, response, posting.datePosted, 'first-published');
     // A JSON-LD validThrough is the posting's validity window. The page does
     // not call it a deadline, so it is not recorded as one: its meaning stays
     // unestablished until the employer's own posting says otherwise.
@@ -642,7 +799,7 @@ export function fromHtml(record, response) {
   if (email) record.emailRoute = email;
   record.readState = h1 && text.length >= 100 ? 'read' : 'unreadable';
   record.observedHtml = { url: response.url, snapshot: response.snapshot, observedAt: response.observedAt };
-  return record;
+  return stampOrigin(record);
 }
 
 // Advertisement closure and employer-posted closure are different statements.
@@ -655,8 +812,52 @@ export function closureScope(text) {
 // read from a plain web page is only the employer's posting once this run has
 // verified that employer's careers page and linked it to this record; until
 // then the page is a mirror or an aggregator, and what it says speaks for
-// that advertisement alone.
-export const isEmployerPosting = record => record.provider !== 'html' || record.authority === 'registered-official';
+// that advertisement alone. A discovery-only entry — a LinkedIn posting, a
+// search result — is never the employer's own posting, whatever else it says.
+export const EMPLOYER_PLATFORMS = new Set(['greenhouse', 'lever', 'smartrecruiters', 'ashby', 'asb']);
+export const isEmployerPosting = record => {
+  if (!record) return false;
+  if (EMPLOYER_PLATFORMS.has(record.provider)) return true;
+  return record.provider === 'html' && record.authority === 'registered-official';
+};
+// Where a fact came from. A fact keeps the authority of the page it was read
+// from, so that a fact read from a mirror keeps speaking for the mirror after
+// the record is later joined to the employer's own posting.
+export function stampOrigin(record) {
+  const origin = { provider: record.provider ?? null, authority: record.authority ?? 'discovery-only', employerPosting: isEmployerPosting(record) };
+  for (const field of Object.values(record.fields ?? {})) {
+    if (!field || typeof field !== 'object') continue;
+    if (!field.origin) field.origin = origin;
+    for (const alt of field.ambiguity ?? []) if (!alt.origin) alt.origin = origin;
+  }
+  return record;
+}
+// Whether a fact speaks for the employer's own posting.
+//
+// The answer is a property of the fact's own origin, not of the record it
+// happens to sit in now. A fact read from an ATS tenant belongs to the
+// employer. A fact read from a plain web page belongs to the employer only
+// when this run verified that employer's careers page and linked it to this
+// record, and the fact was read from that verified link. A fact read from a
+// mirror stays the mirror's, even after the record is joined to the employer's
+// own posting — the mirror's words never become the employer's.
+export function fieldIsEmployerPosting(field, record = null) {
+  const origin = field?.origin ?? null;
+  if (origin) {
+    if (origin.employerPosting === true) return true;
+    if (EMPLOYER_PLATFORMS.has(origin.provider)) return true;
+    if (origin.authority === 'registered-official') return true;
+  }
+  const linked = new Set((record?.association?.linkedUrls ?? []).map(canonicalLocal).filter(Boolean));
+  const source = field?.source?.url ?? null;
+  if (source && linked.size) {
+    try { if (linked.has(canonicalLocal(source))) return true; } catch { /* not a URL */ }
+  }
+  // A fact that carries no stamp of its own — one recorded outside a page read
+  // — is judged by the standing of the record it sits in.
+  if (!origin && record) return isEmployerPosting(record);
+  return false;
+}
 
 // A closure statement only closes the vacancy when the page that made it is
 // the employer's own posting, bound to this advertisement. A mirror or

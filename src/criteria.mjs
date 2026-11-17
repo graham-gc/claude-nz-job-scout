@@ -1,9 +1,11 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
-import { channelKind, closureBoundToAdvertisement, isEmployerPosting, publicationDateIn, readDate, statedFacts } from './evidence.mjs';
+import { channelKind, closureBoundToAdvertisement, fieldIsEmployerPosting, isEmployerPosting, publicationDateIn, readDate, statedFacts, PUBLICATION_RANK, PUBLICATION_SEMANTICS } from './evidence.mjs';
 import { foreignScope, isForeignPlace, nzLocality, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
+import { aucklandInstant, looksLikeTimestamp, momentDay, nzClock, nzDay, parseMoment, parseNumeric } from './dates.mjs';
 
-export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
+export const nzDate = value => nzDay(value);
+
 const dayNumber = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
 const fields = new Set(['location', 'workArrangement', 'hoursPerWeek', 'engagement', 'contractType', 'duration', 'durationWeeks', 'durationMonths', 'startAt', 'endAt', 'workRights']);
 export function criteria(input) {
@@ -92,29 +94,158 @@ export function locationVerdict(record, config) {
 // promoted into one.
 export const DEADLINE_SEMANTICS = ['deadline', 'deadline-date'];
 
+// The claims a field carries: the value the reader kept and every value it
+// set beside it. A fact that was displaced is kept, never dropped, so the
+// check can judge what was actually seen.
+function fieldClaims(field) {
+  const list = [];
+  if (field?.value != null) list.push({ value: field.value, semantics: field.semantics, source: field.source, origin: field.origin, quote: field.quote });
+  for (const alt of field?.ambiguity ?? []) list.push({ value: alt.value, semantics: alt.semantics, source: alt.source, origin: alt.origin, quote: alt.quote });
+  return list;
+}
+
 // The publication window is judged on every reading the value allows. When the
 // readings disagree — one inside the window, one outside — the status stays
 // unknown: the reader does not pick a reading to make a conclusion fit.
-export function publicationVerdict(posted, config, now) {
-  if (!posted?.value || !['first-published', 'advertised-date'].includes(posted.semantics)) {
+//
+// A value that names a moment is compared as a moment, in Auckland's clock. A
+// value that names only a day is compared on the Auckland calendar, so a
+// publication date is never read as UTC midnight.
+//
+// The claims a posting makes are read against each other, because they say
+// different things. A claim that states when the role first appeared
+// ("first advertised", a JobPosting's datePosted) and a claim that states the
+// date of one advertisement of it ("Posted 16/11") can both be true of the
+// same role: the second is a republication of the first. They contradict each
+// other only when the order is the other way round, and a posting that
+// contradicts itself is not resolved by picking one of its dates — the status
+// stays unknown, which is neither "recent" nor "stale".
+//
+// Which page a claim came from decides what it may be used for. The employer's
+// own posting governs: it is the page the run verified, and it is the page
+// that speaks for the vacancy. A mirror's claim speaks for that mirror, and
+// it is used only when the employer's own posting states no publication date
+// at all.
+export function publicationVerdict(posted, config, now, record = null) {
+  const claims = fieldClaims(posted).filter(c => PUBLICATION_SEMANTICS.includes(c.semantics));
+  if (!claims.length) {
     return verdict('Recent publication', 'unknown', posted?.value ? `${posted.semantics}: ${posted.value}; not first-publication evidence` : 'First-publication date not stated/read');
   }
-  const stamp = Date.parse(posted.value);
-  if (/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(posted.value) && Number.isFinite(stamp)) {
-    const age = (Date.parse(now) - stamp) / 86400000;
-    return verdict('Recent publication', !Number.isFinite(age) || age < 0 ? 'unknown' : age <= config.postingDays ? 'satisfied' : 'conflict', `${posted.value} (${posted.semantics})`);
-  }
-  const { readings } = readDate(posted.value);
-  if (!readings.length) return verdict('Recent publication', 'unknown', `${posted.value} (${posted.semantics}) could not be read as a date`);
   const today = nzDate(now);
+  const employer = claims.filter(c => fieldIsEmployerPosting(c, record));
+  const pool = employer.length ? employer : claims;
+  const readings = pool.map(claim => readClaim(claim, config, now, today));
+  const unreadable = readings.find(r => r.kind === 'unreadable');
+  if (unreadable) {
+    return verdict('Recent publication', 'unknown', `${unreadable.claim.value} (${unreadable.claim.semantics}) could not be read as a date`);
+  }
+  const first = readings.filter(r => r.claim.semantics === 'first-published');
+  const advertised = readings.filter(r => r.claim.semantics === 'advertised-date');
+  if (first.length) {
+    // The first appearance is what the posting says it is.
+    const earliest = Math.min(...first.map(r => Math.min(...r.days.map(day => dayNumber(day)))));
+    const named = first.map(r => `${r.claim.value} (${r.claim.semantics})`).join('; ');
+    const firstDays = new Set(first.map(r => r.days.map(d => dayNumber(d)).sort().join('|')));
+    if (firstDays.size > 1) {
+      return verdict('Recent publication', 'unknown', `the posting states more than one first-publication date (${named}); which one is the first appearance is not established`);
+    }
+    // A republication is later than the first appearance. A publication date
+    // that precedes it contradicts the posting's own account of when the role
+    // first appeared.
+    const earlier = advertised.find(r => Math.min(...r.days.map(day => dayNumber(day))) < earliest);
+    if (earlier) {
+      return verdict('Recent publication', 'unknown', `the posting states the role was first advertised on ${first[0].claim.value} and published on ${earlier.claim.value}; the two statements do not agree on when it first appeared`);
+    }
+    const governing = first.find(r => Math.min(...r.days.map(d => dayNumber(d))) === earliest) ?? first[0];
+    return verdict('Recent publication', governing.status, readingDetail(governing));
+  }
+  // No claim states a first appearance, so the earliest advertisement date is
+  // the first appearance: a later one is a republication of it.
+  const governing = advertised.reduce((a, b) => (earliestDay(b) < earliestDay(a) ? b : a), advertised[0]);
+  return verdict('Recent publication', governing.status, readingDetail(governing));
+}
+
+// The day a claim names, for ordering claims against each other.
+const earliestDay = reading => Math.min(...reading.days.map(day => dayNumber(day)));
+// What a claim says about the window, in the reader's own words.
+function readingDetail(reading) {
+  const claim = reading.claim;
+  if (reading.days.length > 1) {
+    const status = reading.status;
+    return `${claim.value} (${claim.semantics}) reads as ${reading.days.join(' or ')}; ${status === 'conflict' ? 'every reading is outside the window' : status === 'satisfied' ? 'every reading is inside the window' : 'the readings disagree about the window'}`;
+  }
+  return `${claim.value} (${claim.semantics})`;
+}
+
+// One claim, read and judged on every reading it allows.
+function readClaim(claim, config, now, today) {
+  const value = String(claim.value ?? '');
+  const moment = parseMoment(value);
+  if (moment && moment.kind !== 'day') {
+    if (moment.kind === 'invalid') return { claim, kind: 'unreadable', days: [], status: 'unknown' };
+    const stamp = moment.kind === 'instant' ? moment.stamp : aucklandInstant(moment.clock);
+    if (stamp == null) return { claim, kind: 'unreadable', days: [], status: 'unknown' };
+    const age = (Date.parse(now) - stamp) / 86400000;
+    return { claim, kind: 'moment', days: [momentDay(moment)], status: age < 0 ? 'unknown' : age <= config.postingDays ? 'satisfied' : 'conflict' };
+  }
+  const { readings } = readDate(value);
+  if (!readings.length) return { claim, kind: 'unreadable', days: [], status: 'unknown' };
   const ages = readings.map(day => dayNumber(today) - dayNumber(day));
   const inside = ages.every(a => a >= 0 && a <= config.postingDays);
   const outside = ages.every(a => a > config.postingDays);
-  const status = inside ? 'satisfied' : outside ? 'conflict' : 'unknown';
-  const detail = readings.length > 1
-    ? `${posted.value} (${posted.semantics}) reads as ${readings.join(' or ')}; ${outside ? 'every reading is outside the window' : inside ? 'every reading is inside the window' : 'the readings disagree about the window'}`
-    : `${posted.value} (${posted.semantics})`;
-  return verdict('Recent publication', status, detail);
+  return { claim, kind: 'day', days: readings, status: inside ? 'satisfied' : outside ? 'conflict' : 'unknown' };
+}
+
+// The publication date as a reference point for comparing a closing value. A
+// publication date that names only a day covers that whole day, so a closing
+// later the same day does not precede it.
+//
+// When the posting states several publication dates, the earliest is the
+// reference: the posting cannot have appeared before it first appeared, so a
+// closing that precedes even that date is contradictory evidence.
+function publicationReference(postedAt) {
+  const claims = fieldClaims(postedAt).filter(c => PUBLICATION_SEMANTICS.includes(c.semantics));
+  if (!claims.length) return null;
+  const moments = [];
+  for (const claim of claims) {
+    const moment = parseMoment(String(claim.value ?? ''));
+    if (moment && moment.kind !== 'invalid') { moments.push(moment); continue; }
+    const { readings } = readDate(String(claim.value ?? ''));
+    if (readings.length === 1) moments.push({ kind: 'day', day: readings[0] });
+  }
+  if (!moments.length) return null;
+  const stamps = moments.map(m => m.kind === 'day' ? Date.parse(`${m.day}T00:00:00Z`) : (m.kind === 'instant' ? m.stamp : aucklandInstant(m.clock))).filter(Number.isFinite);
+  if (!stamps.length) return moments[0];
+  const earliest = Math.min(...stamps);
+  const chosen = moments.find(m => (m.kind === 'day' ? Date.parse(`${m.day}T00:00:00Z`) : (m.kind === 'instant' ? m.stamp : aucklandInstant(m.clock))) === earliest);
+  return chosen ?? moments[0];
+}
+
+// Whether a closing value precedes the publication date it belongs to.
+function beforePublication(moment, publication) {
+  if (!publication || !moment) return false;
+  if (publication.kind === 'day') {
+    // A publication date that names a day covers that day.
+    return momentDay(moment) < publication.day;
+  }
+  const published = publication.kind === 'instant' ? publication.stamp : aucklandInstant(publication.clock);
+  const closes = moment.kind === 'instant' ? moment.stamp : moment.kind === 'clock' ? aucklandInstant(moment.clock) : aucklandInstant(`${moment.day}T00:00:00`);
+  if (published == null || closes == null) return false;
+  return closes < published;
+}
+
+// Where a closing moment stands against now, and against the posting's own
+// publication date: 'expired', 'open', 'before-publication' or 'too-far'.
+export function closingStanding(moment, postedAt, now) {
+  const nowStamp = Date.parse(now);
+  const publication = publicationReference(postedAt);
+  if (beforePublication(moment, publication)) return 'before-publication';
+  if (moment.kind === 'instant') {
+    if (moment.stamp - nowStamp > 366 * 86400000) return 'too-far';
+    return moment.stamp < nowStamp ? 'expired' : 'open';
+  }
+  if (moment.clock > nzClock(new Date(nowStamp + 366 * 86400000))) return 'too-far';
+  return moment.clock < nzClock(now) ? 'expired' : 'open';
 }
 
 // A closing value can name a day or a moment. A value with an explicit time
@@ -123,39 +254,17 @@ export function publicationVerdict(posted, config, now) {
 // boundary is Auckland's, so it is read and compared in that clock. Only a
 // plain date is compared on the calendar — otherwise a closing moment earlier
 // today would pass as "today" and the advertisement would stay open.
-const CLOSING_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?$/;
-const aucklandClock = value => {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
-  }).formatToParts(new Date(value));
-  const get = type => parts.find(p => p.type === type)?.value ?? '00';
-  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
-};
 export function closingMoment(value) {
-  const text = String(value ?? '').trim();
-  const m = text.match(CLOSING_TIMESTAMP);
-  if (!m) return null;
-  const [, date, hh, mm, ss, offset] = m;
-  if (offset) {
-    const stamp = Date.parse(text.replace(' ', 'T'));
-    return Number.isFinite(stamp) ? { kind: 'instant', stamp, date } : null;
+  const moment = parseMoment(value);
+  if (moment && moment.kind !== 'invalid' && moment.kind !== 'day') return moment;
+  // A numeric date with a clock is read on the reading that survives: "25-12-
+  // 2026 03:12" cannot be month first, so the day and the time are known. A
+  // value with two readings names no single moment and is judged on both.
+  const numeric = parseNumeric(value);
+  if (numeric?.kind === 'numeric' && !numeric.ambiguous && numeric.candidates[0].clock) {
+    return { kind: 'clock', clock: numeric.candidates[0].clock, day: numeric.candidates[0].day };
   }
-  return { kind: 'clock', clock: `${date}T${hh}:${mm}:${ss ?? '00'}`, date };
-}
-// Where a closing moment stands against now, and against the posting's own
-// publication date: 'expired', 'open', 'before-publication' or 'too-far'.
-export function closingStanding(moment, postedAt, now) {
-  const nowStamp = Date.parse(now);
-  const postedDay = postedAt?.value ? String(postedAt.value).slice(0, 10) : null;
-  if (moment.kind === 'instant') {
-    if (postedAt?.value && moment.stamp < Date.parse(postedAt.value)) return 'before-publication';
-    if (moment.stamp - nowStamp > 366 * 86400000) return 'too-far';
-    return moment.stamp < nowStamp ? 'expired' : 'open';
-  }
-  if (postedDay && moment.date < postedDay) return 'before-publication';
-  if (moment.clock > aucklandClock(new Date(nowStamp + 366 * 86400000))) return 'too-far';
-  return moment.clock < aucklandClock(now) ? 'expired' : 'open';
+  return null;
 }
 
 // A closing date can close a role only when the evidence establishes what it
@@ -170,10 +279,42 @@ export function closingStanding(moment, postedAt, now) {
 // moment in the past closes the advertisement. On a mirror or an aggregator
 // the same value speaks for that advertisement alone, and an ambiguous value
 // speaks for nothing, so it stays pending verification.
-export function closingVerdict(closing, postedAt, now, authoritative = false) {
-  const value = String(closing.value);
-  if (!DEADLINE_SEMANTICS.includes(closing.semantics)) {
-    if (closing.semantics === 'valid-through' && authoritative) {
+//
+// Which page a value came from decides what it may be used for. A fact read
+// from a mirror keeps speaking for the mirror even after the record is joined
+// to the employer's own posting.
+// A deadline that is not the employer's own statement does not close the
+// employer's role. A mirror that says "applications closed on 12 November"
+// speaks for that advertisement; whether the employer's vacancy is still open
+// is decided by the employer's own posting, and until that page is read the
+// state of the vacancy stays unknown rather than closed.
+const unconfirmedDeadline = value => ({ ...verdict('Closing date', 'unknown', `The closing date (${value}) is stated on a page that is not the employer's own posting; it is pending verification against the employer's original posting`), advisory: true });
+
+export function closingVerdict(closing, postedAt, now, options = {}) {
+  const record = options.record ?? null;
+  const claims = fieldClaims(closing);
+  if (!claims.length) return null;
+  const employer = claims.filter(c => fieldIsEmployerPosting(c, record));
+  const pool = employer.length ? employer : claims;
+  const distinct = [...new Set(pool.map(c => String(c.value)))];
+  if (distinct.length > 1) {
+    return { ...verdict('Closing date', 'unknown', `The closing value reads differently across sources (${distinct.join(' / ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
+  }
+  const claim = pool[0];
+  const value = String(claim.value);
+  const semantics = claim.semantics;
+  const authoritative = employer.length > 0;
+  // A numeric value whose time or whose date does not exist is not read as a
+  // date. It is kept and reported as unreadable, never turned into an expiry
+  // and never dropped so that the advertisement looks open.
+  const numeric = parseNumeric(value);
+  if (numeric?.kind === 'invalid') {
+    const what = numeric.reason === 'time' ? 'the time it names is not a valid time' : 'the date it names is not a real date';
+    const label = semantics === 'valid-through' ? 'validity window' : 'deadline';
+    return { ...verdict('Closing date', 'unknown', `Unconfirmed ${label} retained: ${value}; ${what}, so it is not read as a date and not used for expiry`), advisory: true };
+  }
+  if (!DEADLINE_SEMANTICS.includes(semantics)) {
+    if (semantics === 'valid-through' && authoritative) {
       const moment = closingMoment(value);
       if (moment) {
         const standing = closingStanding(moment, postedAt, now);
@@ -187,27 +328,35 @@ export function closingVerdict(closing, postedAt, now, authoritative = false) {
       if (readings.length > 1) return { ...verdict('Closing date', 'unknown', `The validity window (${value}) reads as two different days (${readings.join(' or ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
       const today = nzDate(now);
       if (readings[0] >= today) return null;
-      if (postedAt?.value && readings[0] < String(postedAt.value).slice(0, 10)) return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it precedes the stated publication date`), advisory: true };
+      const publication = publicationReference(postedAt);
+      if (publication && readings[0] < publication.day) return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it precedes the stated publication date`), advisory: true };
       return verdict('Closing date', 'conflict', `The employer's own posting states the advertisement is valid until ${value} (valid-through); that date has passed`);
     }
-    return { ...verdict('Closing date', 'unknown', `The page carries a ${closing.semantics ?? 'unstated'} value (${value}); what it denotes is not established — pending verification against the employer's original posting`), advisory: true };
+    return { ...verdict('Closing date', 'unknown', `The page carries a ${semantics ?? 'unstated'} value (${value}); what it denotes is not established — pending verification against the employer's original posting`), advisory: true };
   }
   const moment = closingMoment(value);
   if (moment) {
     const standing = closingStanding(moment, postedAt, now);
     if (standing === 'before-publication') return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
     if (standing === 'too-far') return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; too far ahead to be a deadline`), advisory: true };
-    return standing === 'expired' ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : null;
+    if (standing !== 'expired') return null;
+    return authoritative ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : unconfirmedDeadline(value);
   }
   const { readings } = readDate(value);
-  if (!readings.length) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; not used for urgency or open status`), advisory: true };
+  if (!readings.length) {
+    const stated = looksLikeTimestamp(value)
+      ? `Unconfirmed deadline retained: ${value}; the time it names is not a valid time, so it is not read as a date and not used for expiry`
+      : `Unconfirmed deadline retained: ${value}; not used for urgency or open status`;
+    return { ...verdict('Closing date', 'unknown', stated), advisory: true };
+  }
   const today = nzDate(now);
   const past = readings.map(day => day < today);
   if (past.every(Boolean)) {
-    if (readings.length === 1 && postedAt?.value && readings[0] < String(postedAt.value).slice(0, 10)) {
+    const publication = publicationReference(postedAt);
+    if (readings.length === 1 && publication && readings[0] < publication.day) {
       return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
     }
-    return verdict('Closing date', 'conflict', `Deadline has passed: ${value}`);
+    return authoritative ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : unconfirmedDeadline(value);
   }
   if (past.some(Boolean)) {
     return { ...verdict('Closing date', 'unknown', `The deadline value (${value}) reads as two different days (${readings.join(' or ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
@@ -222,9 +371,9 @@ export function closingVerdict(closing, postedAt, now, authoritative = false) {
 export function hardChecks(record, config, now) {
   const f = record.fields, checks = [];
   checks.push(locationVerdict(record, config));
-  checks.push(publicationVerdict(f.postedAt, config, now));
+  checks.push(publicationVerdict(f.postedAt, config, now, record));
   if (f.closesAt?.value) {
-    const closing = closingVerdict(f.closesAt, f.postedAt, now, isEmployerPosting(record));
+    const closing = closingVerdict(f.closesAt, f.postedAt, now, { record });
     if (closing) checks.push(closing);
   }
   checks.push(...config.all.map(c => condition(record, c)));
@@ -250,8 +399,15 @@ export function verifyDisqualifiers(record, config, judgment, now) {
       // quotation fills a gap; it never overrules a fact the run already
       // recorded, and a quotation whose date is not bound to the publication
       // wording proves nothing.
-      const recorded = publicationVerdict(record.fields.postedAt, config, now);
+      //
+      // It does not settle a contradiction either. When the posting itself
+      // states two publication dates, the runtime cannot know which one is
+      // the first appearance, and a quotation that points at one of them
+      // would be choosing the reading that produces a conclusion.
+      const recorded = publicationVerdict(record.fields.postedAt, config, now, record);
       if (recorded.status === 'satisfied' || recorded.status === 'conflict') continue;
+      const recordedClaims = fieldClaims(record.fields.postedAt).filter(c => PUBLICATION_SEMANTICS.includes(c.semantics));
+      if (recordedClaims.length) continue;
       const { readings } = publicationDateIn(claim.quote);
       if (!readings.length) continue;
       const today = nzDate(now);
