@@ -1,6 +1,6 @@
 import { hash } from './store.mjs';
 import { key } from './evidence.mjs';
-import { channelKind, closureBoundToAdvertisement } from './evidence.mjs';
+import { channelKind, closureBoundToAdvertisement, publicationDateIn, readDate, statedFacts } from './evidence.mjs';
 import { foreignScope, isForeignPlace, nzLocality, nzPlace, remoteScope, REMOTE_ONLY } from './places.mjs';
 
 export const nzDate = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
@@ -87,24 +87,79 @@ export function locationVerdict(record, config) {
   return verdict('Location', 'conflict', `In ${config.location.country} but not in the requested cities (${cities.join(', ')}): ${location}`);
 }
 
+// Only these semantics say the page itself calls the value a deadline. A
+// validity window (`validThrough`) does not, and an ambiguous value cannot be
+// promoted into one.
+export const DEADLINE_SEMANTICS = ['deadline', 'deadline-date'];
+
+// The publication window is judged on every reading the value allows. When the
+// readings disagree — one inside the window, one outside — the status stays
+// unknown: the reader does not pick a reading to make a conclusion fit.
+export function publicationVerdict(posted, config, now) {
+  if (!posted?.value || !['first-published', 'advertised-date'].includes(posted.semantics)) {
+    return verdict('Recent publication', 'unknown', posted?.value ? `${posted.semantics}: ${posted.value}; not first-publication evidence` : 'First-publication date not stated/read');
+  }
+  const stamp = Date.parse(posted.value);
+  if (/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(posted.value) && Number.isFinite(stamp)) {
+    const age = (Date.parse(now) - stamp) / 86400000;
+    return verdict('Recent publication', !Number.isFinite(age) || age < 0 ? 'unknown' : age <= config.postingDays ? 'satisfied' : 'conflict', `${posted.value} (${posted.semantics})`);
+  }
+  const { readings } = readDate(posted.value);
+  if (!readings.length) return verdict('Recent publication', 'unknown', `${posted.value} (${posted.semantics}) could not be read as a date`);
+  const today = nzDate(now);
+  const ages = readings.map(day => dayNumber(today) - dayNumber(day));
+  const inside = ages.every(a => a >= 0 && a <= config.postingDays);
+  const outside = ages.every(a => a > config.postingDays);
+  const status = inside ? 'satisfied' : outside ? 'conflict' : 'unknown';
+  const detail = readings.length > 1
+    ? `${posted.value} (${posted.semantics}) reads as ${readings.join(' or ')}; ${outside ? 'every reading is outside the window' : inside ? 'every reading is inside the window' : 'the readings disagree about the window'}`
+    : `${posted.value} (${posted.semantics})`;
+  return verdict('Recent publication', status, detail);
+}
+
+// A closing date can close a role only when the evidence establishes what it
+// is and what day it names. The page must call it a deadline, and the value
+// must be readable without choosing between two days. A value with two
+// readings is only expired when every reading is in the past; when the
+// readings disagree, the status is "meaning ambiguous", never "expired".
+export function closingVerdict(closing, postedAt, now) {
+  const value = String(closing.value);
+  if (!DEADLINE_SEMANTICS.includes(closing.semantics)) {
+    return { ...verdict('Closing date', 'unknown', `The page carries a ${closing.semantics ?? 'unstated'} value (${value}); what it denotes is not established — pending verification against the employer's original posting`), advisory: true };
+  }
+  const stamp = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(Z|[+-]\d{2}:?\d{2})?$/.test(value) ? Date.parse(value) : NaN;
+  if (Number.isFinite(stamp)) {
+    if (postedAt?.value && stamp < Date.parse(postedAt.value)) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
+    if (stamp - Date.parse(now) > 366 * 86400000) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; too far ahead to be a deadline`), advisory: true };
+    return stamp < Date.parse(now) ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : null;
+  }
+  const { readings } = readDate(value);
+  if (!readings.length) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; not used for urgency or open status`), advisory: true };
+  const today = nzDate(now);
+  const past = readings.map(day => day < today);
+  if (past.every(Boolean)) {
+    if (readings.length === 1 && postedAt?.value && readings[0] < String(postedAt.value).slice(0, 10)) {
+      return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
+    }
+    return verdict('Closing date', 'conflict', `Deadline has passed: ${value}`);
+  }
+  if (past.some(Boolean)) {
+    return { ...verdict('Closing date', 'unknown', `The deadline value (${value}) reads as two different days (${readings.join(' or ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
+  }
+  if (readings.length === 1) {
+    const ms = Date.parse(`${readings[0]}T00:00:00Z`);
+    if (ms - Date.parse(now) > 366 * 86400000) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; too far ahead to be a deadline`), advisory: true };
+  }
+  return null;
+}
+
 export function hardChecks(record, config, now) {
   const f = record.fields, checks = [];
   checks.push(locationVerdict(record, config));
-  const posted = f.postedAt;
-  if (!posted?.value || !['first-published', 'advertised-date'].includes(posted.semantics)) checks.push(verdict('Recent publication', 'unknown', posted?.value ? `${posted.semantics}: ${posted.value}; not first-publication evidence` : 'First-publication date not stated/read'));
-  else {
-    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(posted.value), time = Date.parse(posted.value);
-    const age = dateOnly ? dayNumber(nzDate(now)) - dayNumber(posted.value) : (Date.parse(now) - time) / 86400000;
-    checks.push(verdict('Recent publication', !Number.isFinite(age) || age < 0 ? 'unknown' : age <= config.postingDays ? 'satisfied' : 'conflict', `${posted.value} (${posted.semantics})`));
-  }
-  const closing = f.closesAt;
-  if (closing?.value) {
-    const ms = Date.parse(closing.value), beforePosted = f.postedAt?.value && ms < Date.parse(f.postedAt.value);
-    if (beforePosted || !Number.isFinite(ms) || ms - Date.parse(now) > 366 * 86400000) checks.push({ ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${closing.value}; not used for urgency or open status`), advisory: true });
-    else {
-      const expired = /^\d{4}-\d{2}-\d{2}$/.test(closing.value) ? closing.value < nzDate(now) : ms < Date.parse(now);
-      if (expired) checks.push(verdict('Closing date', 'conflict', `Deadline has passed: ${closing.value}`));
-    }
+  checks.push(publicationVerdict(f.postedAt, config, now));
+  if (f.closesAt?.value) {
+    const closing = closingVerdict(f.closesAt, f.postedAt, now);
+    if (closing) checks.push(closing);
   }
   checks.push(...config.all.map(c => condition(record, c)));
   if (config.any.length) {
@@ -115,13 +170,60 @@ export function hardChecks(record, config, now) {
   return checks;
 }
 
+// The model may point at a fact the posting itself states that the reader did
+// not lift into a field. The runtime verifies the pointer against the page
+// and judges it: the model supplies the quotation, never the fact.
+export const DISQUALIFIER_KINDS = ['publication-outside-window', 'engagement-outside-availability'];
+export function verifyDisqualifiers(record, config, judgment, now) {
+  const verified = [];
+  const duties = record.fields.duties?.value ?? '';
+  for (const claim of judgment?.disqualifiers ?? []) {
+    if (!claim || typeof claim.quote !== 'string' || !duties.includes(claim.quote)) continue;
+    if (claim.kind === 'publication-outside-window') {
+      const { readings } = publicationDateIn(claim.quote);
+      if (!readings.length) continue;
+      const today = nzDate(now);
+      const ages = readings.map(day => dayNumber(today) - dayNumber(day));
+      // Every reading must be outside the window: a claim that only holds for
+      // one of two possible readings is not a fact.
+      if (!ages.every(a => a > config.postingDays)) continue;
+      verified.push({ name: 'Publication date stated in the posting', detail: `The posting states a publication date outside the requested ${config.postingDays}-day window: "${claim.quote}"` });
+      continue;
+    }
+    if (claim.kind === 'engagement-outside-availability') {
+      const facts = statedFacts(claim.quote);
+      if (!Object.keys(facts).length) continue;
+      const merged = { ...record, fields: { ...record.fields, ...facts } };
+      const alternatives = config.any.map(group => group.map(c => condition(merged, c)));
+      if (!alternatives.length || !alternatives.every(group => group.some(c => c.status === 'conflict'))) continue;
+      verified.push({ name: 'Engagement stated in the posting', detail: `The posting states an engagement outside the requested availability alternatives: "${claim.quote}"` });
+    }
+  }
+  return verified;
+}
+
+// The checks a record carries, including the ones the model's quotation
+// proved. A verified disqualifier is a hard condition under its own name, so
+// a date exclusion is never reported as a responsibility mismatch.
+export function checksWithJudgment(record, config, judgment, now) {
+  const checks = hardChecks(record, config, now);
+  const verified = verifyDisqualifiers(record, config, judgment, now);
+  for (const v of verified) checks.push(verdict(v.name, 'conflict', v.detail));
+  return { checks, verified };
+}
+
 // A recruitment channel that addresses employers is not a vacancy and not a
 // talent pool. It is recognised from the page's own text, so the rule holds
 // for every record whose body has been read.
 export const isChannel = record => record.opportunityKind?.value === 'employer-channel' || Boolean(channelKind(record.fields.duties?.value ?? ''));
 
+// An exclusion names the condition that excluded it. A role dropped because
+// its publication date is out of the window is never reported as a
+// responsibility mismatch, and the reverse is never true either.
+const conflictNames = checks => [...new Set(checks.filter(c => c.status === 'conflict').map(c => c.name))].join(', ');
+
 export function classify(record, config, judgment, now) {
-  const checks = hardChecks(record, config, now);
+  const { checks } = checksWithJudgment(record, config, judgment, now);
   // A closure closes the vacancy only when the employer said so, on the
   // employer's own posting. A mirror that says "this job has expired" proves
   // that mirror advertisement expired and says nothing about the employer's
@@ -144,12 +246,12 @@ export function classify(record, config, judgment, now) {
     // another country, or one whose responsibilities were never assessed,
     // is not a lead and never enters the recommendation area.
     if (!config.includeTalentPools) return { category: 'excluded', checks, reason: 'Expression of interest/talent pool, not a confirmed vacancy' };
-    if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: 'Talent pool conflicts with a hard condition' };
+    if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: `Talent pool conflicts with a hard condition: ${conflictNames(checks)}` };
     if (!judgment) return { category: 'excluded', checks, reason: 'Talent pool without a responsibility assessment' };
     if (judgment.fit === 'weak') return { category: 'excluded', checks, reason: 'Talent pool responsibilities do not match' };
     return { category: 'pool', checks, reason: 'Expression of interest/talent pool, not a confirmed vacancy' };
   }
-  if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: 'Known hard-condition conflict' };
+  if (checks.some(x => x.status === 'conflict')) return { category: 'excluded', checks, reason: `Known hard-condition conflict: ${conflictNames(checks)}` };
   if (!judgment) return { category: 'unassessed', checks, reason: 'No responsibility assessment' };
   if (judgment.fit === 'weak') return { category: 'excluded', checks, reason: 'Responsibilities do not match' };
   if (record.readState !== 'read' || record.authority !== 'registered-official' || !record.fields.employer?.value || !record.fields.title?.value) return { category: 'unresolved', checks, reason: 'Primary vacancy not fully read or employer association/identity unconfirmed' };

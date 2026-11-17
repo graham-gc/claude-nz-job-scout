@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { load } from './html.mjs';
 import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newRequestId } from './store.mjs';
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
-import { criteria, contextHash, hardChecks, isChannel } from './criteria.mjs';
+import { criteria, contextHash, checksWithJudgment, DISQUALIFIER_KINDS, hardChecks, isChannel } from './criteria.mjs';
 import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, CLOSED_NOTICE } from './evidence.mjs';
 import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised } from './sources.mjs';
 import { siteKey } from './site.mjs';
@@ -213,6 +213,38 @@ export function requestLedger(states) {
   }
   return { requests: [...requests.values()], legacy };
 }
+// Compact, read-only inspection instead of shell loops over private run files.
+// Reuse requestLedger so inherited budgets are not counted a second time.
+export async function listRuns(project, { offset = 0, limit = 20, now = Date.now() } = {}) {
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be a non-negative integer');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be an integer from 1 to 100');
+  const root = await rootAt(project), states = await runStates(root);
+  const page = [...states].reverse().slice(offset, offset + limit);
+  const ids = new Set(page.map(s => s.request?.requestId).filter(Boolean));
+  const ledger = requestLedger(states);
+  const totals = value => Object.fromEntries(STAGES.map(stage => [stage, value?.[stage] ?? 0]));
+  const groups = value => Object.fromEntries(GROUPS.map(group => [group, value?.[group] ?? 0]));
+  return {
+    project: root, total: states.length, offset, limit,
+    nextOffset: offset + page.length < states.length ? offset + page.length : null,
+    runs: page.map(s => ({
+      run: s.id, requestId: s.request?.requestId ?? null,
+      kind: s.request?.kind ?? 'legacy', runIndex: s.request?.runIndex ?? null,
+      startedAt: s.startedAt ?? null, reported: Boolean(s.reported),
+      finished: runFinished(s, now),
+      status: s.reported ? 'reported' : s.request?.finishedAt ? 'ended' : runFinished(s, now) ? 'expired' : 'active',
+      used: totals(s.budget?.used), groups: groups(s.budget?.groups),
+      ownUsed: totals((s.request?.own ?? budgetDelta(s.budget ?? {}, s.request?.baselineBudget ?? zeroCounters())).used)
+    })),
+    requests: ledger.requests.filter(r => ids.has(r.requestId)).map(r => ({
+      requestId: r.requestId, runs: r.runs, startedAt: r.startedAt,
+      used: totals(r.spent.used), groups: groups(r.spent.groups)
+    })),
+    legacy: { runs: ledger.legacy.runs, used: totals(ledger.legacy.spent.used) },
+    note: 'Read-only snapshot of readable saved runs, newest first. used/groups are cumulative request snapshots; ownUsed is per-run spend. Request totals include all runs of each displayed request. No locks, evidence, reports or budgets are changed.'
+  };
+}
+
 export function relevant(record, config) {
   // Retrieval hint only; never a suitability score or a recommendation decision.
   const title = record.fields.title?.value ?? record.lead.title;
@@ -223,7 +255,9 @@ export function relevant(record, config) {
 // ---------------------------------------------------------------------------
 // Merging: fields and evidence are preserved, never wholesale replaced.
 // ---------------------------------------------------------------------------
-const SEMANTIC_WEIGHT = { 'first-published': 4, 'advertised-date': 4, 'deadline': 3, 'deadline-date': 3, 'updated': 1, 'last-published': 1, 'platform-created': 1 };
+// A validity window (a JSON-LD validThrough) is weaker evidence than a
+// deadline the page actually calls a deadline.
+const SEMANTIC_WEIGHT = { 'first-published': 4, 'advertised-date': 4, 'deadline': 3, 'deadline-date': 3, 'valid-through': 2, 'updated': 1, 'last-published': 1, 'platform-created': 1 };
 const READ_RANK = { read: 4, 'closed-stated': 3, partial: 2, 'not-read': 1, unreadable: 0 };
 const fieldWeight = f => SEMANTIC_WEIGHT[f?.semantics] ?? 2;
 
@@ -658,7 +692,10 @@ export function applicationPlan(state, judgments, exclusions, now, budget) {
   // An employer channel is not a vacancy: verifying an application route for it
 // would spend the application budget on a page that offers no vacancy.
   const scored = state.records.filter(r => r.readState === 'read' && !r.closure && !isChannel(r) && !excluded(r, exclusions)).map(r => {
-    const checks = hardChecks(r, state.config, now);
+    const judgment = judgments.find(j => j.recordId === r.recordId);
+    // A disqualifier the runtime verified is a hard condition: the role does
+    // not get an application budget.
+    const { checks } = checksWithJudgment(r, state.config, judgment, now);
     const conflicts = checks.filter(c => c.status === 'conflict').length;
     const unknowns = checks.filter(c => c.status === 'unknown' && !c.advisory).length;
     const fit = fitOf(r);
@@ -676,13 +713,22 @@ export function validateJudgments(input, state) {
   if (!Array.isArray(input?.judgments)) throw new Error('Expected judgments array');
   const seen = new Set();
   for (const j of input.judgments) {
-    if (Object.keys(j).some(k => !['recordId', 'fit', 'reasons', 'quotes'].includes(k))) throw new Error('Judgments accept only recordId, fit, reasons and quotes; webpage facts are runtime-owned');
+    if (Object.keys(j).some(k => !['recordId', 'fit', 'reasons', 'quotes', 'disqualifiers'].includes(k))) throw new Error('Judgments accept only recordId, fit, reasons, quotes and disqualifiers; webpage facts are runtime-owned');
     const record = state.records.find(r => r.recordId === j.recordId);
     if (!record || seen.has(j.recordId)) throw new Error('Unknown/duplicate judgment record ID');
     seen.add(j.recordId);
     if (!['strong', 'possible', 'weak'].includes(j.fit) || !Array.isArray(j.reasons) || !j.reasons.length || j.reasons.some(x => typeof x !== 'string' || x.length > 1000)) throw new Error('fit: strong|possible|weak; reasons: nonempty text array');
     if (j.reasons.some(x => /\p{Script=Han}/u.test(x))) throw new Error(`Judgment reasons for ${j.recordId} must be written in English; preserve source-language text only in quotes`);
     if (!Array.isArray(j.quotes) || !j.quotes.length || j.quotes.some(q => typeof q !== 'string' || q.length < 8 || !(record.fields.duties?.value ?? '').includes(q))) throw new Error('quotes must be exact excerpts from this record duties; model cannot fabricate supporting evidence');
+    // A disqualifier is a pointer, not a fact: the quotation must be the
+    // posting's own text, and the runtime verifies what it states.
+    if (j.disqualifiers != null) {
+      if (!Array.isArray(j.disqualifiers)) throw new Error(`disqualifiers for ${j.recordId} must be an array`);
+      for (const d of j.disqualifiers) {
+        if (!d || typeof d !== 'object' || !DISQUALIFIER_KINDS.includes(d.kind)) throw new Error(`disqualifier kind must be one of ${DISQUALIFIER_KINDS.join(', ')}`);
+        if (typeof d.quote !== 'string' || d.quote.length < 8 || !(record.fields.duties?.value ?? '').includes(d.quote)) throw new Error('disqualifier quote must be an exact excerpt from this record duties');
+      }
+    }
   }
   return input.judgments;
 }

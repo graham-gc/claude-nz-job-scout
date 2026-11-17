@@ -163,6 +163,91 @@ const durationFact = body => {
   return null;
 };
 
+// ---------------------------------------------------------------------------
+// Dates.
+// A numeric date has two possible readings unless one of its parts rules the
+// other out: New Zealand writes day first, US boards write month first. The
+// reader returns every reading it can justify and never picks one to make a
+// conclusion fit. One reading means the date is unambiguous. Two readings mean
+// the value itself says so — and a conclusion that holds for both readings is
+// still safe to state.
+// ---------------------------------------------------------------------------
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const monthIndex = name => { const i = MONTH_NAMES.indexOf(String(name ?? '').toLowerCase().replace(/[^a-z]/g, '')); return i < 0 ? null : i + 1; };
+function isoDate(year, month, day) {
+  const y = Number(year), m = Number(month), d = Number(day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d) || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const stamp = Date.UTC(y, m - 1, d), back = new Date(stamp);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== m - 1 || back.getUTCDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+export function readDate(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return { readings: [], format: 'empty' };
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) { const day = isoDate(iso[1], iso[2], iso[3]); return day ? { readings: [day], format: 'iso' } : { readings: [], format: 'invalid' }; }
+  const numeric = text.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+  if (numeric) {
+    const a = Number(numeric[1]), b = Number(numeric[2]), year = numeric[3];
+    // Day first (NZ) and month first (US) are both possible; only a component
+    // above 12 rules one of them out.
+    const readings = [...new Set([isoDate(year, b, a), isoDate(year, a, b)].filter(Boolean))];
+    if (!readings.length) return { readings: [], format: 'invalid' };
+    return { readings, format: readings.length > 1 ? 'numeric-ambiguous' : 'numeric' };
+  }
+  const words = text.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+),?\s+(\d{4})$/);
+  if (words) {
+    const month = monthIndex(words[2]), day = month ? isoDate(words[3], month, words[1]) : null;
+    return day ? { readings: [day], format: 'day-month' } : { readings: [], format: 'invalid' };
+  }
+  return { readings: [], format: 'unreadable' };
+}
+
+// The wording that makes a date a publication date. A date that belongs to
+// something else — an application deadline, an event, a review — is not one.
+const PUBLICATION_WORDING = /\b(?:posted|published|advertised|listed|advertisement date|date posted|date published)\b/i;
+export function publicationDateIn(text) {
+  const body = normaliseText(text);
+  if (!PUBLICATION_WORDING.test(body)) return { readings: [], format: 'no-publication-wording' };
+  const m = body.match(/(\d{4}-\d{2}-\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+\d{4})/);
+  if (!m) return { readings: [], format: 'no-date' };
+  return readDate(m[1]);
+}
+
+// A quoted passage is read with focused patterns: the model points at one
+// sentence, so the reader does not need the body's context. The same
+// declaration rules — negation, rejected phrases — still apply.
+const QUOTE_CONTRACT_PATTERNS = [
+  { re: /\bpermanent\b[^.]{0,40}\b(?:role|position|contract|employment)\b/i, map: () => 'permanent' },
+  { re: /\b(?:fixed[\s-]?term|temporary)\b[^.]{0,40}\b(?:role|position|contract|employment|contract term)\b/i, map: () => 'fixed-term' },
+];
+const QUOTE_ENGAGEMENT_PATTERNS = [
+  { re: /\b(?:paid\s+)?volunteer\b/i, map: () => 'volunteer' },
+  { re: /\b(?:independent\s+)?contractor\b|\bself[\s-]?employ(?:ed|er)\b/i, map: () => 'independent-contractor' },
+  { re: /\b(?:permanent|fixed[\s-]?term|temporary)\s+(?:employee|staff)\b/i, map: () => 'employee' },
+  { re: /\b(?:this|the)\s+(?:role|position|job|vacancy)\s+is\s+(?:an?\s+)?(?:permanent|fixed[\s-]?term|temporary)\b/i, map: () => 'employee' },
+];
+const QUOTE_WORKLOAD_PATTERNS = [
+  { re: /\bfull[\s-]?time\b/i, map: () => 'full-time' },
+  { re: /\bpart[\s-]?time\b/i, map: () => 'part-time' },
+];
+// The engagement facts a quoted passage states, shaped like record fields so
+// they can be merged over the record for a condition check.
+export function statedFacts(text) {
+  const body = normaliseText(text), out = {};
+  const engagement = declaration(body, QUOTE_ENGAGEMENT_PATTERNS, { reject: REJECTED_PHRASES.engagement });
+  if (engagement) out.engagement = { value: engagement.value };
+  const contract = declaration(body, QUOTE_CONTRACT_PATTERNS, { reject: REJECTED_PHRASES.contractType });
+  if (contract) out.contractType = { value: contract.value };
+  const workload = declaration(body, QUOTE_WORKLOAD_PATTERNS, { reject: REJECTED_PHRASES.workload });
+  if (workload) out.workload = { value: workload.value };
+  const hours = body.match(/\b(\d{1,2}(?:\.\d+)?)\s*(?:hours?|hrs?)\s*(?:per\s*(?:week|wk)|\/\s*(?:week|wk)|p\.?\s*w\.?\b)/i);
+  if (hours && Number(hours[1]) > 0 && Number(hours[1]) <= 60) out.hoursPerWeek = { value: Number(hours[1]) };
+  const duration = durationFact(body);
+  if (duration) out.duration = { value: duration.value };
+  return out;
+}
+
 export function observeText(record, text, response) {
   const fields = record.fields;
   const set = (name, value, quote = value) => { if (!fields[name]?.value && value !== null && value !== undefined && value !== '') fields[name] = fact(value, response, quote); };
@@ -194,22 +279,30 @@ export function observeText(record, text, response) {
   if (channel) record.opportunityKind = fact('employer-channel', response, channel);
   else if (kind) record.opportunityKind = fact('talent-pool', response, kind);
   const dates = name => {
-    const pattern = name === 'postedAt'
+    if (name === 'postedAt') {
       // "Posted 28 February, 2026" is the wording an aggregator uses: no "on",
-      // and a comma before the year.
-      ? /(?:Posted(?:\s+on)?|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s+20\d{2})/i
-      : new RegExp(`(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\\s*:?\\s*(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`
-        + `|Applications? close(?:s)?(?:\\s*at\\s*[\\d.]{1,5}\\s*(?:am|pm)?)?\\s+on\\s+(?:[A-Za-z]+,?\\s+)?(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2})`, 'i');
+      // and a comma before the year. "Posted 15/10/2026" and "Posted on :
+      // 24-10-2026" are the numeric forms of the same statement. A numeric
+      // date that could read two ways is stored as written, so the check can
+      // judge it without the reader choosing a reading.
+      const pattern = /(?:Posted(?:\s+on)?|Date posted|Date published)\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+,?\s*20\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4})/i;
+      const m = body.match(pattern);
+      if (!m) return;
+      const { readings } = readDate(m[1]);
+      if (!readings.length) return;
+      setPostedAt(fields, readings.length === 1 ? readings[0] : m[1], response, m[0], 'advertised-date');
+      return;
+    }
+    const pattern = new RegExp(`(?:Closing (?:on|date)|Applications? (?:must be submitted online by|close(?:s)?(?: on)?))\\s*:?\\s*(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4})`
+      + `|Applications? close(?:s)?(?:\\s*at\\s*[\\d.]{1,5}\\s*(?:am|pm)?)?\\s+on\\s+(?:[A-Za-z]+,?\\s+)?(\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+20\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4})`, 'i');
     const m = body.match(pattern);
     if (m) {
       const raw = m[1] ?? m[2];
       if (!raw) return;
-      const date = new Date(raw.replace(/(\d)(st|nd|rd|th)/, '$1').replace(/,/g, '') + ' UTC');
-      if (!isNaN(date)) {
-        const value = date.toISOString().slice(0, 10);
-        if (name === 'postedAt') setPostedAt(fields, value, response, m[0], 'advertised-date');
-        else if (!fields[name]?.value) fields[name] = fact(value, response, m[0], 'deadline-date');
-      }
+      const { readings } = readDate(raw);
+      if (!readings.length) return;
+      const value = readings.length === 1 ? readings[0] : raw;
+      if (!fields[name]?.value) fields[name] = fact(value, response, m[0], 'deadline-date');
     }
   };
   dates('postedAt'); dates('closesAt');
@@ -502,7 +595,10 @@ export function fromHtml(record, response) {
     f.title = fact(posting.title, response);
     f.employer = fact(typeof posting.hiringOrganization === 'string' ? posting.hiringOrganization : posting.hiringOrganization?.name, response);
     if (posting.datePosted) setPostedAt(f, posting.datePosted, response, posting.datePosted, 'advertised-date');
-    if (posting.validThrough && !f.closesAt?.value) f.closesAt = fact(posting.validThrough, response, posting.validThrough, 'deadline');
+    // A JSON-LD validThrough is the posting's validity window. The page does
+    // not call it a deadline, so it is not recorded as one: its meaning stays
+    // unestablished until the employer's own posting says otherwise.
+    if (posting.validThrough && !f.closesAt?.value) f.closesAt = fact(posting.validThrough, response, posting.validThrough, 'valid-through');
     const locations = [].concat(posting.jobLocation ?? []).map(x => typeof x === 'string' ? x : [x.address?.addressLocality, x.address?.addressRegion, x.address?.addressCountry].filter(Boolean).join(', '));
     if (locations.length && !f.location?.value) f.location = fact(locations.join(' | '), response);
     // JobPosting.identifier is not universally the employer's requisition number.

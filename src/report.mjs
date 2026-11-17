@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { readJson, put, reports, hash, runStates } from './store.mjs';
-import { nzDate, classify, hardChecks } from './criteria.mjs';
+import { nzDate, classify, DEADLINE_SEMANTICS, hardChecks } from './criteria.mjs';
 import { idKeys } from './evidence.mjs';
 import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger } from './engine.mjs';
 
@@ -133,10 +133,16 @@ function jobLines(item, preferences = []) {
   const { record: r, judgment: j, checks } = item;
   const title = value(r, 'title') === 'Not stated / not read' ? r.lead.title || 'Unconfirmed role' : value(r, 'title');
   const employer = r.fields.employer?.value ?? r.lead.employer ?? 'Unconfirmed employer';
+  // A closing value the page does not call a deadline is not printed as one.
+  const closing = r.fields.closesAt?.value
+    ? DEADLINE_SEMANTICS.includes(r.fields.closesAt.semantics)
+      ? `closes: ${esc(r.fields.closesAt.value)} (${esc(r.fields.closesAt.semantics)})`
+      : `closing value: ${esc(r.fields.closesAt.value)} (${esc(r.fields.closesAt.semantics ?? 'unstated')}; the page does not call it a deadline)`
+    : 'closes: not stated / not read';
   const lines = [`### ${esc(title)} — ${esc(employer)}`, '', `- Location / arrangement: ${esc(value(r, 'location'))} · ${esc(value(r, 'workArrangement'))}`,
     `- Work type: ${esc(value(r, 'engagement'))} · ${esc(value(r, 'contractType'))} · ${esc(value(r, 'workload'))} · ${esc(value(r, 'hoursPerWeek'))} hours/week`,
     `- Duration: ${esc(r.fields.duration?.value ? `${r.fields.duration.value.amount} ${r.fields.duration.value.unit}` : 'Not stated / not read')} (original unit; no conversion)`,
-    `- Published: ${esc(value(r, 'postedAt'))}${r.fields.postedAt?.semantics ? ` (${esc(r.fields.postedAt.semantics)})` : ''}; closes: ${esc(value(r, 'closesAt'))}`,
+    `- Published: ${esc(value(r, 'postedAt'))}${r.fields.postedAt?.semantics ? ` (${esc(r.fields.postedAt.semantics)})` : ''}; ${closing}`,
     `- Salary: ${esc(value(r, 'salary'))}; pay status: ${esc(r.fields.payStatus?.value ?? 'unknown')}${r.fields.engagement?.value === 'volunteer' ? ' · **Volunteer**' : ''}`,
     `- Match assessment: ${esc(j?.fit ?? 'unassessed')}. ${(j?.reasons ?? [item.reason]).map(esc).join('; ')}`];
   if (r.relativePublication?.text) lines.push(`- Relative publication wording (verbatim): ${esc(r.relativePublication.text)}; source ${esc(r.relativePublication.source?.url ?? 'not read')}, observed ${esc(r.relativePublication.source?.observedAt ?? 'not read')}; not converted into an exact first-publication date.`);

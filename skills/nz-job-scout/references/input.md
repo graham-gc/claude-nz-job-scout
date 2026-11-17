@@ -1,5 +1,9 @@
 # Inputs and outputs
 
+Use `--compact` with `discover`, `index` and `details` to keep stdout small without shell redirects or temporary files. For `details`, the result is `{records: [...], note: ...}` with record IDs, read/error status, identity, known non-duty fields and gaps. Duties, field quotes and bulky snapshots are omitted from stdout only; their complete saved evidence is unchanged and remains available through `record`. Discovery/index summaries omit verbose budget internals. `--compact` does not alter retrieval, budgets, matching or report generation and is rejected on other commands.
+
+For a compact read-only run/request ledger, use `runs --project /absolute/project [--offset 0] [--limit 20]`. It needs no `--run`, makes no external requests, takes no locks and writes no files. Results are newest first, with `nextOffset` for pagination. Each run's `used`/`groups` are cumulative snapshots; `ownUsed` is its own spend. Displayed request totals include all their continuation runs, avoiding double-counting inherited budgets. The command omits resume text and vacancy bodies.
+
 `start` needs a resume path (PDF with local `pdftotext`, or text/Markdown) and a request JSON. Only the explicitly requested work conditions are hard filters; do not promote salary, missing deadline, seniority or preferences into hard constraints.
 
 ```json
@@ -33,7 +37,7 @@ This is a **schema example**, not a prefilled profile. Do not copy its availabil
 
 **Preferences are executable.** Each free-text preference is matched to a rule over recorded facts (remote, hybrid, on-site, permanent, fixed-term, full-time, part-time, internship, salary, volunteer/not-volunteer, or a named city), and the report prints the field and value that decided it. A preference with no matching rule is reported as having no influence on the order, rather than being silently stored.
 
-Date-only publication uses the Auckland calendar date; timestamp publication uses elapsed hours. Age 0–7 days inclusive passes the default window. Only first-published or explicit advertised-date semantics pass; last-published/created/updated timestamps do not. A missing deadline is not a hard failure. An anomalous deadline is retained as an advisory, never silently fixed or used for an urgency claim.
+Date-only publication uses the Auckland calendar date; timestamp publication uses elapsed hours. Age 0–7 days inclusive passes the default window. Only first-published or explicit advertised-date semantics pass; last-published/created/updated timestamps do not. A value that allows more than one reading is judged on every reading: it excludes the role only when every reading falls outside the window, and it stays unknown when the readings disagree. A missing deadline is not a hard failure. An anomalous deadline is retained as an advisory, never silently fixed or used for an urgency claim. Only a value the page itself calls a deadline (`deadline`, `deadline-date`) can close a role; a JSON-LD `validThrough` is a validity window, recorded as `valid-through` and reported as "what it denotes is not established — pending verification against the employer's original posting", never as an expired deadline.
 
 Exclusions can use `{ "employer": "...", "requisitionId": "...", "url": "https://...", "decision": "applied" }`. Exact known req IDs override reused titles/URLs. Do not add a decision simply because materials were generated. The project’s legacy `.nz-job-scout-state.json` is read without modification; no private decision file is committed.
 
@@ -48,11 +52,16 @@ Model output contains no job facts:
       "recordId": "ID_FROM_RUNTIME",
       "fit": "strong",
       "reasons": ["Daily API automation work matches the resume's demonstrated backend testing experience; mobile automation is only desirable."],
-      "quotes": ["An exact contiguous quote from this record's duties"]
+      "quotes": ["An exact contiguous quote from this record's duties"],
+      "disqualifiers": [
+        { "kind": "publication-outside-window", "quote": "Posted 15/10/2026" }
+      ]
     }
   ]
 }
 ```
+
+`disqualifiers` is optional. It exists for the case where the posting states a disqualifying fact that the reader did not lift into a field — an out-of-window publication date, or an engagement the availability alternatives exclude. The entry is a pointer, not a fact: the quote must be an exact excerpt of this record's duties, and the runtime verifies what the quoted text states before it draws any conclusion. Kinds are `publication-outside-window` and `engagement-outside-availability`. A verified disqualifier becomes a hard condition under its own name, so the exclusion is reported as "Publication date stated in the posting" and never as "Responsibilities do not match"; a disqualifier the runtime cannot verify is ignored. Do not use `fit: "weak"` to express a date or engagement problem: `weak` means the daily work does not match the resume, and that reason stays reserved for it.
 
 fit is strong/possible/weak. Quotes are checked against saved text, but **runtime cannot prove your reasoning or prevent you editing local files**: this is a workflow boundary, not OS isolation. Never claim automated tests validate match quality itself. Empty judgments can produce an honest blocked/unassessed report.
 

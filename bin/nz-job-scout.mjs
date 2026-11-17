@@ -4,19 +4,20 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, isAbsolute } from 'node:path';
 import { readJson, put, rootAt } from '../src/store.mjs';
-import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult, endRun } from '../src/engine.mjs';
+import { start, inRun, discover, index, details, associate, inventory, ticket, searchResult, endRun, listRuns, missingFields } from '../src/engine.mjs';
 import { produce } from '../src/report.mjs';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const help = `NZ Job Scout v1 (development)
 All commands run in the target project, not the plugin cache. JSON output only.
   version
+  runs [--offset 0] [--limit 20]  (read-only run/request ledger; no --run required)
   start --input request.json --resume /absolute/resume.pdf [--new-request]
-  discover --run RUN_ID
-  index --run RUN_ID [--offset 100]
+  discover --run RUN_ID [--compact]
+  index --run RUN_ID [--offset 100] [--compact]
   search-ticket --run RUN_ID
   search-result --run RUN_ID --ticket N [--url HTTPS_URL ... | --error MESSAGE]
-  details --run RUN_ID --record RECORD_ID [--record RECORD_ID ...]
+  details --run RUN_ID --record RECORD_ID [--record RECORD_ID ...] [--compact]
   record --run RUN_ID --record RECORD_ID
   associate --run RUN_ID --record RECORD_ID --official HTTPS_CAREERS_URL
   inventory --run RUN_ID --record RECORD_ID --official HTTPS_CAREERS_URL
@@ -24,15 +25,40 @@ All commands run in the target project, not the plugin cache. JSON output only.
   end --run RUN_ID
 Optional --project /absolute/project on every command. No cleanup, login, shell-fetch,
 plugin installation, application submission or source-editing subcommands.`;
+
+// Keep navigation output small without shell redirects, temporary files or
+// formatter pipelines. Full evidence remains in the run and in `record`.
+function compactOutput(command, result) {
+  const note = 'Navigation summary only; use record --run RUN_ID --record RECORD_ID for complete duties, verbatim quotes and source evidence.';
+  if (command === 'details') return {
+    records: result.map(r => ({
+      recordId: r.recordId, url: r.canonicalUrl, provider: r.provider,
+      authority: r.authority, readState: r.readState, ids: r.ids,
+      fields: Object.fromEntries(Object.entries(r.fields ?? {}).filter(([name]) => name !== 'duties').map(([name, field]) => [name, {
+        value: field.value, ...(field.semantics ? { semantics: field.semantics } : {})
+      }])),
+      gaps: r.gaps ?? missingFields(r), detailError: r.detailError ?? null,
+      closure: r.closure ?? null, identityConflict: Boolean(r.identityConflict || r.anomalies?.length),
+      applicationStatus: r.application?.status ?? 'not-checked'
+    })), note
+  };
+  const { budget, sources, ...rest } = result;
+  return { ...rest,
+    budget: { limits: budget.limits, used: budget.used, groupLimits: budget.groupLimits, groups: budget.groups },
+    sources: sources.map(({ id, name, url, status, reviewed, advertisedTotal, reason }) => ({ id, name, url, status, reviewed, advertisedTotal, reason })),
+    note
+  };
+}
 try {
   const { values: a, positionals } = parseArgs({ allowPositionals: true, options: {
     project: { type: 'string' }, input: { type: 'string' }, resume: { type: 'string' }, run: { type: 'string' },
     ticket: { type: 'string' }, url: { type: 'string', multiple: true }, error: { type: 'string' },
     record: { type: 'string', multiple: true }, official: { type: 'string' }, judgments: { type: 'string' },
-    offset: { type: 'string' }, help: { type: 'boolean' }, 'new-request': { type: 'boolean' },
+    offset: { type: 'string' }, limit: { type: 'string' }, compact: { type: 'boolean' }, help: { type: 'boolean' }, 'new-request': { type: 'boolean' },
   } });
   const command = positionals[0], project = a.project ?? process.cwd();
   if (a.help || !command) { process.stdout.write(help + '\n'); process.exit(0); }
+  if (a.compact && !['discover', 'index', 'details'].includes(command)) throw new Error('--compact is supported only by discover, index and details; record returns complete evidence');
   const required = (...names) => { for (const name of names) if (!a[name]) throw new Error(`Missing --${name}; use --help`); };
   let result;
   if (command === 'version') {
@@ -47,6 +73,11 @@ try {
       packageVersion: pkg?.version ?? null,
       consistent: Boolean(manifest?.version && pkg?.version && manifest.version === pkg.version),
     };
+  }
+  else if (command === 'runs') {
+    // Inspect even active or finished runs without taking a command lock,
+    // creating a run, rewriting evidence, or spending external-call budget.
+    result = await listRuns(project, { offset: Number(a.offset ?? 0), limit: Number(a.limit ?? 20) });
   }
   else if (command === 'start') {
     required('input', 'resume');
@@ -97,5 +128,5 @@ try {
       }
     });
   }
-  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  process.stdout.write(JSON.stringify(a.compact ? compactOutput(command, result) : result, null, 2) + '\n');
 } catch (e) { process.stderr.write(JSON.stringify({ error: e.message }) + '\n'); process.exitCode = 1; }
