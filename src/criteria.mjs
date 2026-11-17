@@ -117,6 +117,47 @@ export function publicationVerdict(posted, config, now) {
   return verdict('Recent publication', status, detail);
 }
 
+// A closing value can name a day or a moment. A value with an explicit time
+// and an explicit timezone is an instant and is compared as one. A value with
+// a time but no timezone is the employer's own clock, and the runtime's day
+// boundary is Auckland's, so it is read and compared in that clock. Only a
+// plain date is compared on the calendar — otherwise a closing moment earlier
+// today would pass as "today" and the advertisement would stay open.
+const CLOSING_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?$/;
+const aucklandClock = value => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(value));
+  const get = type => parts.find(p => p.type === type)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
+};
+export function closingMoment(value) {
+  const text = String(value ?? '').trim();
+  const m = text.match(CLOSING_TIMESTAMP);
+  if (!m) return null;
+  const [, date, hh, mm, ss, offset] = m;
+  if (offset) {
+    const stamp = Date.parse(text.replace(' ', 'T'));
+    return Number.isFinite(stamp) ? { kind: 'instant', stamp, date } : null;
+  }
+  return { kind: 'clock', clock: `${date}T${hh}:${mm}:${ss ?? '00'}`, date };
+}
+// Where a closing moment stands against now, and against the posting's own
+// publication date: 'expired', 'open', 'before-publication' or 'too-far'.
+export function closingStanding(moment, postedAt, now) {
+  const nowStamp = Date.parse(now);
+  const postedDay = postedAt?.value ? String(postedAt.value).slice(0, 10) : null;
+  if (moment.kind === 'instant') {
+    if (postedAt?.value && moment.stamp < Date.parse(postedAt.value)) return 'before-publication';
+    if (moment.stamp - nowStamp > 366 * 86400000) return 'too-far';
+    return moment.stamp < nowStamp ? 'expired' : 'open';
+  }
+  if (postedDay && moment.date < postedDay) return 'before-publication';
+  if (moment.clock > aucklandClock(new Date(nowStamp + 366 * 86400000))) return 'too-far';
+  return moment.clock < aucklandClock(now) ? 'expired' : 'open';
+}
+
 // A closing date can close a role only when the evidence establishes what it
 // is and what day it names. The page must call it a deadline, and the value
 // must be readable without choosing between two days. A value with two
@@ -125,14 +166,22 @@ export function publicationVerdict(posted, config, now) {
 //
 // A validity window is a third thing. Google's JobPosting schema gives
 // `validThrough` one meaning: "the date when the job posting will expire". On
-// the employer's own posting that is the employer's own statement, and a date
-// in the past closes the advertisement. On a mirror or an aggregator the same
-// value speaks for that advertisement alone, and an ambiguous value speaks for
-// nothing, so it stays pending verification.
+// the employer's own posting that is the employer's own statement, and a
+// moment in the past closes the advertisement. On a mirror or an aggregator
+// the same value speaks for that advertisement alone, and an ambiguous value
+// speaks for nothing, so it stays pending verification.
 export function closingVerdict(closing, postedAt, now, authoritative = false) {
   const value = String(closing.value);
   if (!DEADLINE_SEMANTICS.includes(closing.semantics)) {
     if (closing.semantics === 'valid-through' && authoritative) {
+      const moment = closingMoment(value);
+      if (moment) {
+        const standing = closingStanding(moment, postedAt, now);
+        if (standing === 'before-publication') return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it precedes the stated publication date`), advisory: true };
+        if (standing === 'too-far') return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; too far ahead to be a closing date`), advisory: true };
+        if (standing === 'expired') return verdict('Closing date', 'conflict', `The employer's own posting states the advertisement is valid until ${value} (valid-through); that moment has passed`);
+        return null;
+      }
       const { readings } = readDate(value);
       if (!readings.length) return { ...verdict('Closing date', 'unknown', `Unconfirmed validity window retained: ${value}; it is not read as a date and is not used for expiry`), advisory: true };
       if (readings.length > 1) return { ...verdict('Closing date', 'unknown', `The validity window (${value}) reads as two different days (${readings.join(' or ')}); its meaning is ambiguous — pending verification against the employer's original posting`), advisory: true };
@@ -143,11 +192,12 @@ export function closingVerdict(closing, postedAt, now, authoritative = false) {
     }
     return { ...verdict('Closing date', 'unknown', `The page carries a ${closing.semantics ?? 'unstated'} value (${value}); what it denotes is not established — pending verification against the employer's original posting`), advisory: true };
   }
-  const stamp = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(Z|[+-]\d{2}:?\d{2})?$/.test(value) ? Date.parse(value) : NaN;
-  if (Number.isFinite(stamp)) {
-    if (postedAt?.value && stamp < Date.parse(postedAt.value)) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
-    if (stamp - Date.parse(now) > 366 * 86400000) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; too far ahead to be a deadline`), advisory: true };
-    return stamp < Date.parse(now) ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : null;
+  const moment = closingMoment(value);
+  if (moment) {
+    const standing = closingStanding(moment, postedAt, now);
+    if (standing === 'before-publication') return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; it precedes the stated publication date`), advisory: true };
+    if (standing === 'too-far') return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; too far ahead to be a deadline`), advisory: true };
+    return standing === 'expired' ? verdict('Closing date', 'conflict', `Deadline has passed: ${value}`) : null;
   }
   const { readings } = readDate(value);
   if (!readings.length) return { ...verdict('Closing date', 'unknown', `Unconfirmed deadline retained: ${value}; not used for urgency or open status`), advisory: true };
