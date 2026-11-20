@@ -19,6 +19,7 @@ import { implementationIdentity, sameImplementation, incompatibilityMessage, unp
 // continuation runs of one request share its budget, and a request the user
 // starts afresh carries its own id and its own budget.
 export const MAX_RUNS_PER_REQUEST = 3;
+export const DEFAULT_REQUEST_LIMITS = Object.freeze({ discovery: 20, detail: 40, application: 10 });
 
 const STAGES = ['discovery', 'detail', 'application'];
 const STAGE_LABEL = { discovery: 'discovery', detail: 'detail', application: 'application' };
@@ -158,7 +159,7 @@ export async function start(project, input, resumePath, options = {}) {
     const legacyRuns = prior.filter(s => !s.request?.requestId);
     const legacy = zeroCounters();
     for (const s of legacyRuns) addBudget(legacy, ownSpend(s));
-    const limits = { discovery: 20, detail: 20, application: 10 };
+    const limits = { ...DEFAULT_REQUEST_LIMITS, ...requestRuns[0]?.budget?.limits };
     const usedUp = STAGES.filter(stage => (spent.used[stage] ?? 0) >= limits[stage]);
     if (requestRuns.length >= MAX_RUNS_PER_REQUEST || usedUp.length) {
       const reason = requestRuns.length >= MAX_RUNS_PER_REQUEST
