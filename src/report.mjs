@@ -6,6 +6,7 @@ import { idKeys } from './evidence.mjs';
 import { mentionsCity } from './places.mjs';
 import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger, ownSpend } from './engine.mjs';
 import { describeImplementation } from './runtime.mjs';
+import { inventoryComplete } from './sources.mjs';
 
 const esc = text => String(text ?? '').replace(/[\[\]<>*_`|]/g, x => `\\${x}`).replace(/\s+/g, ' ').trim();
 // Values are shown in words, never as raw JSON.
@@ -33,7 +34,7 @@ export function coverage(state) {
   const http = state.attempts.filter(a => a.kind === 'http'), received = http.filter(a => a.status === 200 && !/robots\.txt$/.test(a.url));
   if (!http.length && !state.tickets.some(t => t.status !== 'pending')) return 'not-started';
   if (!received.length && !state.tickets.some(t => t.status === 'completed')) return 'blocked';
-  const inventoryDone = state.sources.every(s => s.status === 'completed' && s.inventoryComplete);
+  const inventoryDone = state.sources.every(s => s.status === 'completed' && s.inventoryComplete && inventoryComplete(s));
   return inventoryDone && state.tickets.some(t => t.status === 'completed') && state.records.every(r => r.readState === 'read') ? 'complete' : 'partial';
 }
 
@@ -316,7 +317,12 @@ export function render(report) {
     `- Discovered ${Object.keys(report.records).length} records; assessed ${items.filter(i => i.judgment).length}; unassessed ${items.filter(i => i.category === 'unassessed').length}. Unassessed does not mean unsuitable.`,
     `- Current-run status tally: ${[...statusCounts].map(([s, n]) => `${s}: ${n}`).join('; ')}.`,
     '', '## Sources and budget', '');
-  for (const s of state.sources) lines.push(`- ${link(s.name, s.url)}: ${s.status}; actually read ${s.reviewed}${s.advertisedTotal != null ? ` / advertised ${s.advertisedTotal}` : ''}. ${esc(s.reason ?? s.note ?? '')}`);
+  for (const s of state.sources) {
+    const counts = [`admitted ${s.reviewed}`];
+    if (s.returned != null) counts.push(`returned ${s.returned}`);
+    if (s.advertisedTotal != null) counts.push(`advertised ${s.advertisedTotal}`);
+    lines.push(`- ${link(s.name, s.url)}: ${s.status}, ${counts.join(', ')}. ${esc(s.reason ?? s.note ?? '')}`);
+  }
   const budget = state.budget, groups = budget.groups ?? {}, limits = budget.limits ?? {};
   const stageGroups = budget.stageGroups ?? {};
   const stageRobots = budget.stageRobots ?? {};

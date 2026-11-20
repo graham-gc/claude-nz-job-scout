@@ -50,8 +50,9 @@ function compactOutput(command, result) {
   const { budget, sources, ...rest } = result;
   return { ...rest,
     budget: { limits: budget.limits, used: budget.used, groupLimits: budget.groupLimits, groups: budget.groups },
-    sources: sources.map(({ id, name, url, status, reviewed, advertisedTotal, reason }) => ({ id, name, url, status, reviewed, advertisedTotal, reason })),
-    note
+    sources: sources.map(({ id, name, url, status, reviewed, returned, advertisedTotal, inventoryComplete, reason, note }) =>
+      ({ id, name, url, status, reviewed, returned, advertisedTotal, inventoryComplete, reason, note })),
+    note: [result.note, note].filter(Boolean).join('. ')
   };
 }
 try {
@@ -113,15 +114,9 @@ try {
       switch (command) {
         case 'discover': return discover(state, reader);
         case 'index': {
-          const result = index(state), offset = Number(a.offset ?? 0);
+          const offset = Number(a.offset ?? 0);
           if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be a non-negative integer');
-          // Paginate the compact index without dumping the full evidence store.
-          const all = [...state.records];
-          if (offset) {
-            const { relevant } = await import('../src/engine.mjs');
-            result.records = all.filter(r => relevant(r, state.config)).slice(offset, offset + 100).map(r => ({ recordId: r.recordId, title: r.fields.title?.value ?? r.lead.title, employer: r.fields.employer?.value ?? r.lead.employer, location: r.fields.location?.value, readState: r.readState, url: r.canonicalUrl }));
-          }
-          return result;
+          return index(state, offset);
         }
         case 'search-ticket': return ticket(state);
         case 'search-result': required('ticket'); return searchResult(state, a.ticket, a.url ?? [], a.error);

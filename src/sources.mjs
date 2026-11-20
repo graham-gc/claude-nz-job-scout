@@ -86,6 +86,12 @@ export function resolveLead(url, sources = SOURCES) {
   return { ...shape, url: canonical(url), employer: registered?.name, sourceKey: registered?.id ?? siteKey(url), authority: registered ? 'registered-official' : 'discovery-only' };
 }
 
+export function inventoryComplete({ advertisedTotal, returned, reviewed, note }) {
+  // Older runs have no returned count. Their notes identify a clipped listing.
+  return Number.isSafeInteger(advertisedTotal) && advertisedTotal >= 0 && reviewed >= advertisedTotal
+    && (returned == null ? !note : reviewed === returned);
+}
+
 export function parseListing(source, response, run) {
   const records = [], leads = [];
   const employer = Object.hasOwn(source, 'employer') ? source.employer : source.name;

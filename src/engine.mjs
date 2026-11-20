@@ -7,7 +7,7 @@ import { hash, put, rootAt, runId, runPath, locked, startLock, runStates, newReq
 import { Reader, charge, publicUrl, countItems, countDetail } from './net.mjs';
 import { criteria, contextHash, checksWithJudgment, classify, DISQUALIFIER_KINDS, hardChecks, isChannel } from './criteria.mjs';
 import { newRecord, canonical, canonicalLocal, key, sameIdentity, formProof, idKeys, textOf, clean, fieldIsEmployerPosting, SEMANTICS_WEIGHT, publicationOrderKey, CLOSED_NOTICE, applyPageClaims, quoteCorpus } from './evidence.mjs';
-import { SOURCES, sourcesFor, parseListing, resolveLead, readDetail, recognised, discoveryDisclosure } from './sources.mjs';
+import { SOURCES, sourcesFor, parseListing, inventoryComplete, resolveLead, readDetail, recognised, discoveryDisclosure } from './sources.mjs';
 import { siteKey } from './site.mjs';
 import { implementationIdentity, sameImplementation, incompatibilityMessage, unpinnedRunMessage, unpinnedRequestMessage, describeImplementation } from './runtime.mjs';
 
@@ -283,11 +283,26 @@ export async function listRuns(project, { offset = 0, limit = 20, now = Date.now
   };
 }
 
-export function relevant(record, config) {
-  // Retrieval hint only; never a suitability score or a recommendation decision.
-  const title = record.fields.title?.value ?? record.lead.title;
-  const words = config.roleFamilies.join(' ').toLowerCase().split(/[^a-z0-9+#]+/).filter(x => x.length > 2 && !['engineer', 'engineering', 'development', 'developer', 'internship', 'graduate', 'senior', 'junior', 'intern'].includes(x));
-  return words.some(w => key(title).includes(key(w))) || /software|\bQA\b|SDET|test|backend|back.end|automation|platform|developer|programmer|devops/i.test(title);
+const GENERIC_ROLE_WORDS = new Set(['engineer', 'engineering', 'development', 'developer', 'internship', 'graduate', 'senior', 'junior', 'intern']);
+const TITLE_HINTS = /software|\bQA\b|SDET|test|backend|back.end|automation|platform|developer|programmer|devops/i;
+const dutyKey = value => key(value).replace(/\btest(?:s|ing)\b/g, 'test');
+
+function dutyQueries(roleFamilies) {
+  // Use an exact role phrase or multiple specific terms from the same family.
+  return roleFamilies.flatMap(family => family.split('/')).map(family => {
+    const phrase = dutyKey(family);
+    const words = phrase.split(' ').filter(word =>
+      (word.length > 2 || word === 'qa') && !GENERIC_ROLE_WORDS.has(word) && !/^(and|for|the|with)$/.test(word));
+    return { phrase, words: [...new Set(words)] };
+  }).filter(query => query.words.length > 0);
+}
+
+function dutiesMatch(record, queries) {
+  if (!record.fields.duties?.value || !queries.length) return false;
+  const text = dutyKey(record.fields.duties.value);
+  const words = new Set(text.split(' '));
+  return queries.some(query => ` ${text} `.includes(` ${query.phrase} `)
+    || (query.words.length >= 2 && query.words.every(word => words.has(word))));
 }
 
 // ---------------------------------------------------------------------------
@@ -462,25 +477,54 @@ export async function discover(state, reader, sources = null) {
       const allowed = countItems(state, source.id, result.returned);
       const records = result.records.slice(0, allowed), leads = result.leads.slice(0, Math.max(0, allowed - records.length));
       merge(state, [...records, ...leads.map(l => newRecord(l, state.id))]);
-      Object.assign(status, { status: 'completed', reviewed: records.length + leads.length, advertisedTotal: result.total,
-        inventoryComplete: result.total !== null && result.returned >= result.total, snapshot: response.snapshot });
-      if (allowed < result.returned) { status.note = `Per-source item ceiling kept ${allowed} of ${result.returned} returned entries`; state.warnings.push(`${source.name}: only ${allowed} of ${result.returned} returned entries were admitted (per-source ceiling).`); }
-      else if (result.total > result.returned) status.note = 'Only returned page checked; remaining inventory not fetched';
-      else if (result.total === null) status.note = 'Returned entries checked; full site coverage not established';
+      const usable = result.records.length + result.leads.length;
+      const reviewed = records.length + leads.length;
+      const advertisedTotal = Number.isSafeInteger(result.total) && result.total >= 0 ? result.total : null;
+      Object.assign(status, { status: 'completed', reviewed, returned: result.returned, advertisedTotal, snapshot: response.snapshot });
+      if (reviewed < result.returned) {
+        const reasons = [];
+        if (allowed < usable) reasons.push('per-source item ceiling');
+        if (usable < result.returned) reasons.push('entries without posting URLs');
+        status.note = `Only ${reviewed} of ${result.returned} returned entries were admitted (${reasons.join(' and ')})`;
+        state.warnings.push(`${source.name}: ${status.note}.`);
+      } else if (advertisedTotal > result.returned) status.note = 'Only returned page checked; remaining inventory not fetched';
+      else if (advertisedTotal === null) status.note = 'Returned entries checked; full site coverage not established';
+      status.inventoryComplete = inventoryComplete(status);
     } catch (e) {
       Object.assign(status, { status: /restricted|robots|no retry/i.test(e.message) ? 'restricted' : 'incomplete', reason: e.message });
     }
   }
   return index(state);
 }
-export function index(state) {
-  const candidates = state.records.filter(r => relevant(r, state.config));
+function indexEntry(record, title, matchedBy) {
+  return { recordId: record.recordId, title, employer: record.fields.employer?.value ?? record.lead.employer,
+    location: record.fields.location?.value ?? null, readState: record.readState, authority: record.authority,
+    gaps: missingFields(record), url: record.canonicalUrl, matchedBy };
+}
+export function index(state, offset = 0) {
+  const { roleFamilies } = state.config;
+  const titleWords = roleFamilies.join(' ').toLowerCase().split(/[^a-z0-9+#]+/)
+    .filter(word => word.length > 2 && !GENERIC_ROLE_WORDS.has(word)).map(key);
+  const queries = dutyQueries(roleFamilies);
+  const titleMatches = [], dutyMatches = [], untitled = [];
+  for (const record of state.records) {
+    const title = clean(record.fields.title?.value) || clean(record.lead.title);
+    const titleKey = key(title);
+    if (title && (TITLE_HINTS.test(title) || titleWords.some(word => titleKey.includes(word)))) {
+      titleMatches.push({ record, title, matchedBy: 'title' });
+    } else if (dutiesMatch(record, queries)) {
+      dutyMatches.push({ record, title, matchedBy: 'duties' });
+    } else if (!title && !record.detailAttempted && !record.closure && !record.identityConflict && !record.anomalies?.length) {
+      untitled.push(record);
+    }
+  }
+  const candidates = [...titleMatches, ...dutyMatches];
+  const records = candidates.slice(offset, offset + 100).map(({ record, title, matchedBy }) => indexEntry(record, title, matchedBy));
+  const omitted = candidates.length - offset - records.length;
   return { run: state.id, discovered: state.records.length, candidates: candidates.length, budget: state.budget,
-    sources: state.sources, warnings: state.warnings,
-    records: candidates.slice(0, 100).map(r => ({ recordId: r.recordId, title: r.fields.title?.value ?? r.lead.title,
-      employer: r.fields.employer?.value ?? r.lead.employer, location: r.fields.location?.value ?? null,
-      readState: r.readState, authority: r.authority, gaps: missingFields(r), url: r.canonicalUrl })),
-    ...(candidates.length > 100 ? { omitted: candidates.length - 100, note: 'Use index --offset 100 to read the next page' } : {}) };
+    sources: state.sources, warnings: state.warnings, records,
+    untitledLeads: { total: untitled.length, records: untitled.slice(0, 3).map(record => indexEntry(record, '', 'untitled')) },
+    ...(omitted > 0 ? { omitted, note: `Use index --offset ${offset + 100} to read the next page` } : {}) };
 }
 export function ticket(state) {
   if (state.tickets.some(t => t.status === 'pending')) throw new Error('Complete the pending search ticket before requesting another');
