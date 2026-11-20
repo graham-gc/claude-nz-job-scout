@@ -4,7 +4,7 @@ import { readJson, put, reports, hash, runStates } from './store.mjs';
 import { nzDate, classify, DEADLINE_SEMANTICS, hardChecks } from './criteria.mjs';
 import { idKeys } from './evidence.mjs';
 import { mentionsCity } from './places.mjs';
-import { excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger, ownSpend } from './engine.mjs';
+import { DEFAULT_REQUEST_LIMITS, excluded, validateJudgments, verifyApplication, applicationPlan, requestLedger, ownSpend } from './engine.mjs';
 import { describeImplementation } from './runtime.mjs';
 import { inventoryComplete } from './sources.mjs';
 
@@ -323,7 +323,7 @@ export function render(report) {
     if (s.advertisedTotal != null) counts.push(`advertised ${s.advertisedTotal}`);
     lines.push(`- ${link(s.name, s.url)}: ${s.status}, ${counts.join(', ')}. ${esc(s.reason ?? s.note ?? '')}`);
   }
-  const budget = state.budget, groups = budget.groups ?? {}, limits = budget.limits ?? {};
+  const budget = state.budget, groups = budget.groups ?? {}, limits = { ...DEFAULT_REQUEST_LIMITS, ...budget.limits };
   const stageGroups = budget.stageGroups ?? {};
   const stageRobots = budget.stageRobots ?? {};
   // Each stage prints its own ledger, taken from the same run's counters.
@@ -337,7 +337,7 @@ export function render(report) {
     `- Observable calls / reserved tickets (${request ? 'request totals including this run' : 'this run'}): ${stageLine('discovery', 'Discovery')}; ${stageLine('detail', 'Detail')}; ${stageLine('application', 'Application')}. Total robots.txt reads: ${budget.robotsUsed ?? 0}; redirects and robots reads are included above, with no separate robots ceiling.`);
   if (request) {
     const own = request.own?.used ?? request.own ?? {};
-    lines.push(`- Current request (requestId ${esc(request.requestId ?? '')}, ${request.kind === 'new' ? 'new request' : 'continuation'}): all runs share one observable-call budget (discovery ${limits.discovery ?? 20} / detail ${limits.detail ?? 20} / application ${limits.application ?? 10}). This is run ${request.runIndex}/${request.maxRuns}; opening another run does not reset the budget. Only one run may be active per request. A report ends the run; use end --run RUN_ID to close an abandoned run before continuing. Use start --new-request only for a new scan explicitly requested by the user; its budget is independent and does not carry over prior spend. This run used: discovery ${own.discovery ?? 0}, detail ${own.detail ?? 0}, application ${own.application ?? 0}.`,
+    lines.push(`- Current request (requestId ${esc(request.requestId ?? '')}, ${request.kind === 'new' ? 'new request' : 'continuation'}): all runs share one observable-call budget (discovery ${limits.discovery} / detail ${limits.detail} / application ${limits.application}). This is run ${request.runIndex}/${request.maxRuns}; opening another run does not reset the budget. Only one run may be active per request. A report ends the run; use end --run RUN_ID to close an abandoned run before continuing. Use start --new-request only for a new scan explicitly requested by the user; its budget is independent and does not carry over prior spend. This run used: discovery ${own.discovery ?? 0}, detail ${own.detail ?? 0}, application ${own.application ?? 0}.`,
       `- Project request ledger: ${requestLedgerText(report.ledger)}`,
       `- Network time used: ${Math.round((state.networkSpentMs ?? 0) / 1000)} seconds / ${Math.round((state.networkBudgetMs ?? 0) / 1000)} seconds; model thinking time is excluded.`,
       `- ${esc(report.stopReason)}; no authenticated browsing, application submission, resume upload, or email sending occurred in this run.`);
